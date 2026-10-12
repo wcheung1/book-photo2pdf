@@ -1,0 +1,1389 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<title>書本掃描轉 PDF</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='48' font-size='48'%3E%F0%9F%93%95%3C/text%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#0f172a;--card:#1e293b;--card2:#334155;--text:#f1f5f9;--muted:#94a3b8;
+  --primary:#38bdf8;--primary-d:#0ea5e9;--ok:#34d399;--warn:#fbbf24;--danger:#f87171;
+  --accent:#a78bfa;--border:#475569;--shutter:#ef4444;--radius:14px;
+  --font:"PingFang TC","Noto Sans TC","Microsoft JhengHei","Hiragino Sans GB","Helvetica Neue",Arial,sans-serif;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--text);font-family:var(--font);font-size:16px;overflow:hidden}
+button,input{font-family:inherit}
+.app{display:flex;flex-direction:column;height:100%;max-width:720px;margin:0 auto;position:relative}
+.screen{display:none;flex-direction:column;flex:1;min-height:0;padding:12px;padding-bottom:max(12px,env(safe-area-inset-bottom))}
+.screen.active{display:flex}
+.topbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-shrink:0}
+.topbar h1{flex:1;font-size:1.15rem;margin:0;font-weight:700}
+.btn{border:none;border-radius:12px;padding:12px 16px;font-size:.95rem;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;transition:transform .1s,background .15s,opacity .15s;color:#fff;background:var(--card2)}
+.btn:active{transform:scale(.97)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{background:linear-gradient(135deg,var(--primary),var(--primary-d));color:#0f172a}
+.btn-ok{background:var(--ok);color:#064e3b}
+.btn-danger{background:var(--danger);color:#450a0a}
+.btn-accent{background:var(--accent);color:#1e1b4b}
+.btn-ghost{background:transparent;border:1px solid var(--border);color:var(--text)}
+.btn-sm{padding:8px 12px;font-size:.85rem;border-radius:10px}
+.btn-icon{width:42px;height:42px;padding:0;border-radius:12px;flex-shrink:0}
+.btn-block{width:100%}
+.hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:18px;padding:8px}
+.hero-icon{font-size:3.2rem;line-height:1}
+.hero h2{margin:0;font-size:1.45rem}
+.hero p{margin:0;color:var(--muted);font-size:.95rem;max-width:280px;line-height:1.45}
+.entry-grid{display:grid;gap:12px;width:100%;max-width:340px}
+.entry-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px;display:flex;flex-direction:column;align-items:center;gap:8px;cursor:pointer;transition:border-color .15s,background .15s}
+.entry-card:hover,.entry-card:focus{border-color:var(--primary);outline:none}
+.entry-card .ico{font-size:2rem}
+.entry-card strong{font-size:1.05rem}
+.entry-card span{font-size:.8rem;color:var(--muted)}
+.fold{margin-top:8px;width:100%;max-width:340px}
+.fold summary{cursor:pointer;color:var(--muted);font-size:.85rem;padding:6px;list-style:none;text-align:center}
+.fold summary::-webkit-details-marker{display:none}
+.fold[open] summary{color:var(--primary)}
+.fold .body{background:var(--card);border-radius:12px;padding:12px;font-size:.85rem;color:var(--muted);line-height:1.5;text-align:left;margin-top:6px}
+.cam-wrap{flex:1;min-height:0;position:relative;background:#000;border-radius:var(--radius);overflow:hidden;display:flex;align-items:center;justify-content:center}
+#camVideo,#camCanvas{width:100%;height:100%;object-fit:cover}
+.cam-guide{position:absolute;inset:8%;border:2px dashed rgba(56,189,248,.7);border-radius:8px;pointer-events:none}
+.cam-guide::before{content:"";position:absolute;left:50%;top:5%;bottom:5%;width:2px;background:rgba(167,139,250,.75);transform:translateX(-50%)}
+.cam-guide-label{position:absolute;top:4px;left:50%;transform:translateX(-50%);background:rgba(15,23,42,.75);color:var(--primary);font-size:.7rem;padding:2px 8px;border-radius:8px;white-space:nowrap}
+.cam-bar{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:12px;flex-shrink:0}
+.shutter{width:68px;height:68px;border-radius:50%;border:4px solid #fff;background:var(--shutter);box-shadow:0 0 0 4px rgba(239,68,68,.35);padding:0}
+.shutter:active{transform:scale(.92)}
+.stats{font-size:.8rem;color:var(--muted);text-align:center}
+.list-stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;flex-shrink:0}
+.chip{background:var(--card);border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:.8rem;color:var(--muted)}
+.chip strong{color:var(--text)}
+.photo-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:12px;padding-bottom:8px;min-height:0}
+.photo-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px;touch-action:none}
+.photo-card.dragging{opacity:.85;border-color:var(--primary);box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.photo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.drag-handle{cursor:grab;color:var(--muted);font-size:1.1rem;padding:4px 6px;user-select:none}
+.photo-title{flex:1;font-size:.85rem;font-weight:600}
+.pages-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pages-row.single{grid-template-columns:1fr}
+.page-thumb{background:#0b1220;border-radius:10px;overflow:hidden;position:relative;aspect-ratio:3/4;border:1px solid var(--border)}
+.page-thumb img,.page-thumb canvas{width:100%;height:100%;object-fit:contain;display:block;background:#000}
+.page-badge{position:absolute;top:4px;left:4px;background:rgba(15,23,42,.85);font-size:.65rem;padding:2px 6px;border-radius:6px;color:var(--primary)}
+.page-actions{position:absolute;bottom:4px;right:4px;display:flex;gap:4px}
+.bottom-bar{display:flex;gap:8px;flex-shrink:0;padding-top:8px;border-top:1px solid var(--border);margin-top:4px;align-items:stretch}
+.bottom-bar .btn{white-space:nowrap;flex-shrink:0}
+.bottom-bar .btn-block{flex:1;flex-shrink:1;min-width:0}
+.progress-panel{display:none;position:fixed;inset:0;background:rgba(15,23,42,.82);z-index:100;align-items:center;justify-content:center;padding:20px}
+.progress-panel.show{display:flex}
+.progress-box{background:var(--card);border-radius:16px;padding:22px 20px;width:100%;max-width:300px;text-align:center}
+.progress-bar{height:8px;background:var(--card2);border-radius:999px;overflow:hidden;margin:14px 0}
+.progress-bar>i{display:block;height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--accent));border-radius:999px;transition:width .2s}
+.modal{display:none;position:fixed;inset:0;z-index:90;background:rgba(15,23,42,.9);flex-direction:column;padding:10px;padding-bottom:max(10px,env(safe-area-inset-bottom))}
+.modal.show{display:flex}
+.modal-body{flex:1;min-height:0;display:flex;flex-direction:column;gap:8px;max-width:720px;margin:0 auto;width:100%}
+.adjust-stage{flex:1;min-height:0;display:grid;grid-template-columns:1fr;gap:8px}
+@media(min-width:640px){.adjust-stage{grid-template-columns:1fr 1fr}}
+.adjust-canvas-wrap{position:relative;background:#000;border-radius:12px;overflow:hidden;min-height:180px;touch-action:none}
+#adjustCanvas,#previewCanvas{width:100%;height:100%;display:block;object-fit:contain}
+.preview-wrap{background:var(--card);border-radius:12px;overflow:hidden;min-height:140px;display:flex;flex-direction:column}
+.preview-wrap h3{margin:0;padding:8px 10px;font-size:.8rem;color:var(--muted);border-bottom:1px solid var(--border)}
+.preview-pages{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:4px;padding:6px;min-height:0}
+.preview-pages.single{grid-template-columns:1fr}
+.preview-pages canvas{width:100%;height:100%;object-fit:contain;background:#000;border-radius:6px;max-height:280px}
+.toast{position:fixed;left:50%;bottom:calc(96px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(160%);background:var(--card2);color:var(--text);padding:10px 16px;border-radius:12px;font-size:.85rem;z-index:200;transition:transform .25s;max-width:min(92%,340px);text-align:center;border:1px solid var(--border);line-height:1.35;word-break:keep-all;overflow-wrap:anywhere}
+.toast.show{transform:translateX(-50%) translateY(0)}
+.toast.warn{border-color:var(--warn);color:var(--warn)}
+.toast.err{border-color:var(--danger);color:var(--danger)}
+.hidden-file{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.settings-panel{display:none;background:var(--card);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px;font-size:.85rem}
+.settings-panel.open{display:block}
+.settings-panel label{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid var(--border)}
+.settings-panel label:last-child{border-bottom:none}
+.settings-panel select,.settings-panel input[type=range]{max-width:140px}
+.lib-status{font-size:.75rem;color:var(--muted);margin-top:6px}
+.lib-status.ok{color:var(--ok)}
+.lib-status.fail{color:var(--danger)}
+.empty{text-align:center;color:var(--muted);padding:40px 16px;font-size:.9rem}
+.kbd-hint{font-size:.7rem;color:var(--muted);text-align:center;margin-top:4px}
+@media(max-width:360px){
+  .btn{padding:10px 12px;font-size:.88rem}
+  .shutter{width:60px;height:60px}
+  .hero h2{font-size:1.25rem}
+  .page-actions .btn-sm{padding:6px 8px;font-size:.75rem}
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+<!-- HOME -->
+<section class="screen active" id="screen-home">
+  <div class="topbar">
+    <h1>📕 書本掃描</h1>
+    <button class="btn btn-icon btn-ghost" id="btnHomeSettings" title="設定" type="button">⚙️</button>
+  </div>
+  <div class="settings-panel" id="homeSettings">
+    <label>輸出畫質
+      <select id="setQuality"><option value="0.85">標準</option><option value="0.95">高清</option><option value="0.7">慳位</option></select>
+    </label>
+    <label>PDF 頁闊（px）
+      <select id="setPdfWidth"><option value="1200">1200</option><option value="1600" selected>1600</option><option value="2000">2000</option></select>
+    </label>
+    <div class="lib-status" id="libStatus">程式庫載入緊…</div>
+  </div>
+  <div class="hero">
+    <div class="hero-icon">📖➡️📄</div>
+    <h2>影書變 PDF</h2>
+    <p>一張相切左右兩頁，自動拉直，喺你手機本地處理，唔會上傳。</p>
+    <div class="entry-grid">
+      <button class="entry-card" id="btnOpenCamera" type="button">
+        <span class="ico">📷</span>
+        <strong>開相機影書</strong>
+        <span>即時預覽 · 逐頁影</span>
+      </button>
+      <button class="entry-card" id="btnOpenUpload" type="button">
+        <span class="ico">🖼️</span>
+        <strong>上載相片</strong>
+        <span>一次過揀多張 · 自動排次序</span>
+      </button>
+    </div>
+    <details class="fold">
+      <summary>💡 提示</summary>
+      <div class="body">打開本書，左右兩頁一齊入鏡。影斜咗或者近書脊彎曲都得，之後會自動拉直。想再準啲可以入「手動調整」拖四個角同書脊線。</div>
+    </details>
+  </div>
+  <div class="bottom-bar" id="homeBottom" style="display:none">
+    <button class="btn btn-primary btn-block" id="btnGoList" type="button">📋 睇清單／出 PDF</button>
+  </div>
+</section>
+
+<!-- CAMERA -->
+<section class="screen" id="screen-camera">
+  <div class="topbar">
+    <button class="btn btn-icon btn-ghost" id="btnCamBack" type="button">←</button>
+    <h1>影書</h1>
+    <button class="btn btn-sm btn-primary" id="btnCamToList" type="button">清單</button>
+  </div>
+  <div class="cam-wrap" id="camWrap">
+    <video id="camVideo" playsinline autoplay muted></video>
+    <canvas id="camCanvas" style="display:none"></canvas>
+    <div class="cam-guide"><span class="cam-guide-label">左頁 ┃ 右頁</span></div>
+  </div>
+  <div class="stats" id="camStats">已影 0 張 · 共 0 頁</div>
+  <div class="cam-bar">
+    <button class="btn btn-ghost btn-sm" id="btnCamFallback" type="button">系統相機</button>
+    <button class="shutter" id="btnShutter" type="button" title="快門" aria-label="快門"></button>
+    <button class="btn btn-ghost btn-sm" id="btnCamFlip" type="button">轉鏡</button>
+  </div>
+</section>
+
+<!-- LIST -->
+<section class="screen" id="screen-list">
+  <div class="topbar">
+    <button class="btn btn-icon btn-ghost" id="btnListHome" type="button">←</button>
+    <h1>頁面清單</h1>
+    <button class="btn btn-icon btn-ghost" id="btnListAdd" type="button" title="加相">➕</button>
+  </div>
+  <div class="list-stats">
+    <span class="chip">相 <strong id="statPhotos">0</strong></span>
+    <span class="chip">頁 <strong id="statPages">0</strong></span>
+  </div>
+  <div class="photo-list" id="photoList">
+    <div class="empty" id="listEmpty">未有相。撳上面 ➕ 或者返去開相機／上載。</div>
+  </div>
+  <div class="bottom-bar">
+    <button class="btn btn-ghost" id="btnListCam" type="button">📷 影多啲</button>
+    <button class="btn btn-ok btn-block" id="btnExportPdf" type="button" disabled>📄 輸出 PDF</button>
+  </div>
+</section>
+
+<!-- ADJUST MODAL -->
+<div class="modal" id="modalAdjust">
+  <div class="modal-body">
+    <div class="topbar">
+      <button class="btn btn-icon btn-ghost" id="btnAdjClose" type="button">←</button>
+      <h1>手動調整</h1>
+      <button class="btn btn-sm btn-ghost" id="btnAdjReset" type="button">重設</button>
+    </div>
+    <div class="adjust-stage">
+      <div class="adjust-canvas-wrap" id="adjustWrap">
+        <canvas id="adjustCanvas"></canvas>
+      </div>
+      <div class="preview-wrap">
+        <h3>即時預覽（左 → 右）</h3>
+        <div class="preview-pages" id="adjPreview">
+          <canvas id="prevLeft"></canvas>
+          <canvas id="prevRight"></canvas>
+        </div>
+      </div>
+    </div>
+    <p class="kbd-hint">拖四個角點同紫色書脊線 · 電腦可用方向鍵微調角點（先撳選中）</p>
+    <div class="bottom-bar">
+      <button class="btn btn-primary btn-block" id="btnAdjApply" type="button">✅ 用呢個結果</button>
+    </div>
+  </div>
+</div>
+
+<!-- PROGRESS -->
+<div class="progress-panel" id="progressPanel">
+  <div class="progress-box">
+    <div id="progressTitle">處理緊…</div>
+    <div class="progress-bar"><i id="progressFill"></i></div>
+    <div id="progressText" style="font-size:.85rem;color:var(--muted)">0 / 0</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<input type="file" id="fileUpload" class="hidden-file" accept="image/*" multiple>
+<input type="file" id="fileCapture" class="hidden-file" accept="image/*" capture="environment">
+<input type="file" id="fileReplace" class="hidden-file" accept="image/*" capture="environment">
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+<script>
+/* ========= 書本掃描轉 PDF — 全部本地處理 ========= */
+(function () {
+  'use strict';
+
+  const $ = (s, r) => (r || document).querySelector(s);
+  const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+
+  const state = {
+    photos: [], // {id, name, time, src, w, h, auto, manual, pages:[{id,side,dataUrl}]}
+    facing: 'environment',
+    stream: null,
+    opencvReady: false,
+    jspdfReady: false,
+    exifrReady: false,
+    sortable: null,
+    adjust: null, // {photoId, corners:[4], spineX, selectedCorner}
+    replaceTarget: null,
+    quality: 0.85,
+    pdfWidth: 1600,
+    uid: 1
+  };
+
+  function nextId(p) { return (p || 'id') + '_' + (state.uid++); }
+
+  function toast(msg, type) {
+    const el = $('#toast');
+    el.textContent = msg;
+    el.className = 'toast show' + (type ? ' ' + type : '');
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => el.classList.remove('show'), 2800);
+  }
+
+  function showScreen(id) {
+    $$('.screen').forEach(s => s.classList.remove('active'));
+    const sc = $('#screen-' + id);
+    if (sc) sc.classList.add('active');
+    if (id === 'list') renderList();
+    if (id !== 'camera') stopCamera();
+  }
+
+  function updateHomeBottom() {
+    $('#homeBottom').style.display = state.photos.length ? 'flex' : 'none';
+  }
+
+  function statsText() {
+    const p = state.photos.length;
+    const pages = state.photos.reduce((n, ph) => n + (ph.pages ? ph.pages.length : 0), 0);
+    return { p, pages };
+  }
+
+  function refreshStats() {
+    const { p, pages } = statsText();
+    const cam = $('#camStats');
+    if (cam) cam.textContent = `已影 ${p} 張 · 共 ${pages} 頁`;
+    const sp = $('#statPhotos'), sg = $('#statPages');
+    if (sp) sp.textContent = p;
+    if (sg) sg.textContent = pages;
+    const exp = $('#btnExportPdf');
+    if (exp) exp.disabled = pages === 0;
+    updateHomeBottom();
+  }
+
+  /* ----- Library load ----- */
+  function updateLibStatus() {
+    const el = $('#libStatus');
+    const parts = [];
+    parts.push(state.opencvReady ? 'OpenCV ✅' : 'OpenCV ⏳／後備模式');
+    parts.push(window.jspdf ? 'jsPDF ✅' : 'jsPDF ❌');
+    parts.push(window.exifr ? 'EXIF ✅' : 'EXIF 後備');
+    el.textContent = parts.join(' · ');
+    el.className = 'lib-status ' + (window.jspdf ? 'ok' : 'fail');
+    state.jspdfReady = !!window.jspdf;
+    state.exifrReady = !!window.exifr;
+  }
+
+  function loadOpenCV() {
+    const urls = [
+      'https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js',
+      'https://unpkg.com/@techstark/opencv-js@4.9.0-release.1/dist/opencv.js'
+    ];
+    return new Promise((resolve) => {
+      if (window.cv && cv.Mat) { state.opencvReady = true; resolve(true); return; }
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        state.opencvReady = !!ok;
+        updateLibStatus();
+        resolve(!!ok);
+      };
+      function hookReady() {
+        try {
+          if (!window.cv) return false;
+          // 有啲 build 有 then 但唔係標準 Promise，唔好硬 call .catch
+          if (cv.Mat) { finish(true); return true; }
+          if (typeof cv.then === 'function') {
+            try {
+              cv.then(function (real) {
+                if (real && real.Mat) window.cv = real;
+                finish(!!(window.cv && window.cv.Mat));
+              });
+            } catch (e) { /* 轉用下面 onRuntimeInitialized／輪詢 */ }
+          }
+          const prev = cv.onRuntimeInitialized;
+          cv.onRuntimeInitialized = function () {
+            if (typeof prev === 'function') try { prev(); } catch (e) {}
+            finish(!!cv.Mat);
+          };
+          // 輪詢後備（有啲 build 唔會 call onRuntimeInitialized）
+          let n = 0;
+          const timer = setInterval(() => {
+            n++;
+            if (window.cv && cv.Mat) { clearInterval(timer); finish(true); }
+            else if (n > 150) { clearInterval(timer); if (!done) finish(!!(window.cv && cv.Mat)); }
+          }, 100);
+          return true;
+        } catch (e) {
+          console.warn('OpenCV hook', e);
+          return false;
+        }
+      }
+      function tryUrl(i) {
+        if (done) return;
+        if (i >= urls.length) { finish(false); return; }
+        const s = document.createElement('script');
+        s.async = true;
+        s.src = urls[i];
+        s.onload = () => {
+          if (!hookReady()) tryUrl(i + 1);
+        };
+        s.onerror = () => tryUrl(i + 1);
+        document.head.appendChild(s);
+      }
+      tryUrl(0);
+      setTimeout(() => { if (!done) finish(!!(window.cv && cv.Mat)); }, 35000);
+    });
+  }
+
+  /* ----- Image helpers ----- */
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  function fileToDataURL(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function getCaptureTime(file) {
+    try {
+      if (window.exifr) {
+        const ex = await exifr.parse(file, { pick: ['DateTimeOriginal', 'CreateDate', 'ModifyDate'] });
+        if (ex) {
+          const d = ex.DateTimeOriginal || ex.CreateDate || ex.ModifyDate;
+          if (d) return new Date(d).getTime();
+        }
+      }
+    } catch (e) { /* ignore */ }
+    if (file.lastModified) return file.lastModified;
+    // natural name fallback handled in sort
+    return 0;
+  }
+
+  function naturalName(a, b) {
+    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  /* ----- Book detection & warp (OpenCV or fallback) ----- */
+  function defaultCorners(w, h) {
+    const m = Math.min(w, h) * 0.04;
+    return [
+      { x: m, y: m },
+      { x: w - m, y: m },
+      { x: w - m, y: h - m },
+      { x: m, y: h - m }
+    ];
+  }
+
+  function detectBookAuto(img) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    if (state.opencvReady && window.cv && cv.Mat) {
+      try {
+        return detectWithOpenCV(img, w, h);
+      } catch (e) {
+        console.warn('OpenCV detect fail', e);
+      }
+    }
+    return detectFallback(img, w, h);
+  }
+
+  function detectFallback(img, w, h) {
+    const corners = defaultCorners(w, h);
+    const spineX = w * 0.5;
+    return { corners, spineX, dual: true };
+  }
+
+  function detectWithOpenCV(img, w, h) {
+    const maxSide = 900;
+    const scale = Math.min(1, maxSide / Math.max(w, h));
+    const sw = Math.round(w * scale), sh = Math.round(h * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = sw; canvas.height = sh;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, sw, sh);
+
+    let src = cv.imread(canvas);
+    let gray = new cv.Mat();
+    let blur = new cv.Mat();
+    let edges = new cv.Mat();
+    let dil = new cv.Mat();
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    cv.Canny(blur, edges, 50, 150);
+    const k = cv.Mat.ones(3, 3, cv.CV_8U);
+    cv.dilate(edges, dil, k);
+    k.delete();
+
+    let contours = new cv.MatVector();
+    let hierarchy = new cv.Mat();
+    cv.findContours(dil, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+
+    let best = null, bestArea = 0;
+    const imgArea = sw * sh;
+    for (let i = 0; i < contours.size(); i++) {
+      const cnt = contours.get(i);
+      const peri = cv.arcLength(cnt, true);
+      let approx = new cv.Mat();
+      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+      if (approx.rows === 4) {
+        const area = cv.contourArea(approx);
+        if (area > imgArea * 0.12 && area > bestArea) {
+          bestArea = area;
+          if (best) best.delete();
+          best = approx;
+        } else approx.delete();
+      } else approx.delete();
+    }
+
+    let corners;
+    if (best) {
+      const pts = [];
+      for (let i = 0; i < 4; i++) {
+        pts.push({ x: best.data32S[i * 2] / scale, y: best.data32S[i * 2 + 1] / scale });
+      }
+      best.delete();
+      corners = orderCorners(pts);
+    } else {
+      corners = defaultCorners(w, h);
+    }
+
+    // Spine: vertical intensity variance in middle of book region
+    const spineX = findSpine(gray, scale, corners, w, h, sw, sh);
+
+    // Heuristic: if book is very narrow or contour weak, still dual if aspect looks like open book
+    const dual = true;
+
+    src.delete(); gray.delete(); blur.delete(); edges.delete(); dil.delete();
+    contours.delete(); hierarchy.delete();
+
+    return { corners, spineX, dual };
+  }
+
+  function orderCorners(pts) {
+    // TL, TR, BR, BL
+    const sorted = pts.slice().sort((a, b) => a.y - b.y);
+    const top = sorted.slice(0, 2).sort((a, b) => a.x - b.x);
+    const bot = sorted.slice(2, 4).sort((a, b) => a.x - b.x);
+    return [top[0], top[1], bot[1], bot[0]];
+  }
+
+  function findSpine(grayMat, scale, corners, w, h, sw, sh) {
+    // Sample vertical gradient energy along x in book center band
+    try {
+      const xs = corners.map(c => c.x * scale);
+      const ys = corners.map(c => c.y * scale);
+      const minX = Math.max(0, Math.floor(Math.min(...xs)));
+      const maxX = Math.min(sw - 1, Math.ceil(Math.max(...xs)));
+      const minY = Math.max(0, Math.floor(Math.min(...ys)));
+      const maxY = Math.min(sh - 1, Math.ceil(Math.max(...ys)));
+      const x0 = Math.floor(minX + (maxX - minX) * 0.35);
+      const x1 = Math.ceil(minX + (maxX - minX) * 0.65);
+      let bestX = Math.floor((minX + maxX) / 2), bestScore = -1;
+      for (let x = x0; x <= x1; x++) {
+        let score = 0;
+        for (let y = minY + 2; y < maxY - 2; y++) {
+          const i = y * sw + x;
+          const l = grayMat.data[i - 1], r = grayMat.data[i + 1];
+          score += Math.abs(r - l);
+        }
+        // Prefer near center slightly
+        const centerBias = 1 - Math.abs((x - (minX + maxX) / 2) / ((maxX - minX) / 2 + 1)) * 0.15;
+        score *= centerBias;
+        if (score > bestScore) { bestScore = score; bestX = x; }
+      }
+      return bestX / scale;
+    } catch (e) {
+      return w * 0.5;
+    }
+  }
+
+  function interpEdge(c0, c1, t) {
+    return { x: c0.x + (c1.x - c0.x) * t, y: c0.y + (c1.y - c0.y) * t };
+  }
+
+  function spinePoints(corners, spineX) {
+    // Find t on top and bottom edges where x ≈ spineX
+    function tOnEdge(a, b, sx) {
+      const dx = b.x - a.x;
+      if (Math.abs(dx) < 1e-6) return 0.5;
+      return Math.max(0, Math.min(1, (sx - a.x) / dx));
+    }
+    const tt = tOnEdge(corners[0], corners[1], spineX);
+    const tb = tOnEdge(corners[3], corners[2], spineX);
+    return {
+      top: interpEdge(corners[0], corners[1], tt),
+      bot: interpEdge(corners[3], corners[2], tb),
+      tTop: tt,
+      tBot: tb
+    };
+  }
+
+  function warpPage(img, quad, outW, outH, dewarp) {
+    // quad: TL,TR,BR,BL in source
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    if (state.opencvReady && window.cv && cv.Mat) {
+      try {
+        return warpOpenCV(img, quad, outW, outH, dewarp);
+      } catch (e) {
+        console.warn('warp opencv fail', e);
+      }
+    }
+    return warpCanvas(img, quad, outW, outH);
+  }
+
+  function warpOpenCV(img, quad, outW, outH, dewarp) {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth || img.width;
+    c.height = img.naturalHeight || img.height;
+    c.getContext('2d').drawImage(img, 0, 0);
+    let src = cv.imread(c);
+    const srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      quad[0].x, quad[0].y, quad[1].x, quad[1].y,
+      quad[2].x, quad[2].y, quad[3].x, quad[3].y
+    ]);
+    const dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+      0, 0, outW - 1, 0, outW - 1, outH - 1, 0, outH - 1
+    ]);
+    let M = cv.getPerspectiveTransform(srcTri, dstTri);
+    let dst = new cv.Mat();
+    cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+
+    if (dewarp) {
+      try {
+        dst = simpleDewarp(dst);
+      } catch (e) { /* keep perspective only */ }
+    }
+
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    cv.imshow(out, dst);
+    src.delete(); srcTri.delete(); dstTri.delete(); M.delete(); dst.delete();
+    return out;
+  }
+
+  function simpleDewarp(mat) {
+    // Column-wise vertical shift based on horizontal projection curvature near spine side
+    // Lightweight approximation: detect top/bottom content edge per column and straighten
+    const w = mat.cols, h = mat.rows;
+    let gray = new cv.Mat();
+    cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+    const topEdge = new Float32Array(w);
+    const botEdge = new Float32Array(w);
+    const thresh = 28;
+    for (let x = 0; x < w; x++) {
+      let top = 0, bot = h - 1;
+      for (let y = 0; y < h; y++) {
+        if (gray.data[y * w + x] < 255 - thresh) { top = y; break; }
+      }
+      for (let y = h - 1; y >= 0; y--) {
+        if (gray.data[y * w + x] < 255 - thresh) { bot = y; break; }
+      }
+      topEdge[x] = top;
+      botEdge[x] = bot;
+    }
+    // Smooth edges
+    const smooth = (arr) => {
+      const o = new Float32Array(arr.length);
+      for (let i = 0; i < arr.length; i++) {
+        let s = 0, n = 0;
+        for (let k = -8; k <= 8; k++) {
+          const j = i + k;
+          if (j >= 0 && j < arr.length) { s += arr[j]; n++; }
+        }
+        o[i] = s / n;
+      }
+      return o;
+    };
+    const st = smooth(topEdge), sb = smooth(botEdge);
+    const avgTop = st.reduce((a, b) => a + b, 0) / w;
+    const avgBot = sb.reduce((a, b) => a + b, 0) / w;
+
+    // Build remap
+    let mapX = new cv.Mat(h, w, cv.CV_32FC1);
+    let mapY = new cv.Mat(h, w, cv.CV_32FC1);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        mapX.floatPtr(y, x)[0] = x;
+        const srcTop = st[x], srcBot = sb[x];
+        const srcH = Math.max(1, srcBot - srcTop);
+        const dstY = avgTop + (y / Math.max(1, h - 1)) * (avgBot - avgTop);
+        // Map destination y back: content row fraction
+        const frac = (y - avgTop) / Math.max(1, avgBot - avgTop);
+        const srcY = srcTop + frac * srcH;
+        mapY.floatPtr(y, x)[0] = Math.max(0, Math.min(h - 1, srcY));
+      }
+    }
+    let out = new cv.Mat();
+    cv.remap(mat, out, mapX, mapY, cv.INTER_LINEAR, cv.BORDER_REPLICATE);
+    gray.delete(); mapX.delete(); mapY.delete();
+    mat.delete();
+    return out;
+  }
+
+  function warpCanvas(img, quad, outW, outH) {
+    // Subdivision bilinear-ish warp using canvas by scanning destination
+    const canvas = document.createElement('canvas');
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext('2d');
+    // Draw using two triangles (affine approx) — good enough fallback
+    const srcC = document.createElement('canvas');
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    srcC.width = iw; srcC.height = ih;
+    srcC.getContext('2d').drawImage(img, 0, 0);
+    // Use pattern fill via repeated small strips
+    const steps = 40;
+    for (let i = 0; i < steps; i++) {
+      const t0 = i / steps, t1 = (i + 1) / steps;
+      const top0 = interpEdge(quad[0], quad[1], t0);
+      const top1 = interpEdge(quad[0], quad[1], t1);
+      const bot0 = interpEdge(quad[3], quad[2], t0);
+      const bot1 = interpEdge(quad[3], quad[2], t1);
+      const dx0 = Math.round(t0 * outW), dx1 = Math.round(t1 * outW);
+      // sample mid column from source strip ≈ drawImage with transform
+      try {
+        ctx.save();
+        // Map source quad strip to dest rect strip approximately
+        const sw = Math.hypot(top1.x - top0.x, top1.y - top0.y) || 1;
+        // draw vertical strip by projecting
+        for (let y = 0; y < outH; y++) {
+          const v = y / (outH - 1 || 1);
+          const sx0 = top0.x + (bot0.x - top0.x) * v;
+          const sy0 = top0.y + (bot0.y - top0.y) * v;
+          const sx1 = top1.x + (bot1.x - top1.x) * v;
+          const sy1 = top1.y + (bot1.y - top1.y) * v;
+          // one pixel row
+          if (dx1 > dx0) {
+            ctx.drawImage(srcC, sx0, sy0, Math.max(1, sx1 - sx0), 1.2, dx0, y, dx1 - dx0, 1);
+          }
+        }
+        ctx.restore();
+      } catch (e) { /* continue */ }
+    }
+    return canvas;
+  }
+
+  function splitAndWarp(img, corners, spineX, dual) {
+    const w = img.naturalWidth || img.width;
+    const h = img.naturalHeight || img.height;
+    const sp = spinePoints(corners, spineX);
+    const pdfW = state.pdfWidth;
+    const pages = [];
+
+    if (!dual) {
+      const outH = Math.round(pdfW * 1.414);
+      const canvas = warpPage(img, corners, pdfW, outH, pdfW >= 800);
+      pages.push({ id: nextId('pg'), side: 'single', dataUrl: canvas.toDataURL('image/jpeg', state.quality) });
+      return pages;
+    }
+
+    // Left page: TL, spineTop, spineBot, BL
+    const leftQuad = [corners[0], sp.top, sp.bot, corners[3]];
+    // Right: spineTop, TR, BR, spineBot
+    const rightQuad = [sp.top, corners[1], corners[2], sp.bot];
+
+    // Estimate page aspect from quad height/width
+    function quadSize(q) {
+      const topW = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y);
+      const leftH = Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y);
+      return { topW: Math.max(1, topW), leftH: Math.max(1, leftH) };
+    }
+    const ls = quadSize(leftQuad), rs = quadSize(rightQuad);
+    const leftH = Math.round(pdfW * (ls.leftH / ls.topW));
+    const rightH = Math.round(pdfW * (rs.leftH / rs.topW));
+
+    const doDewarp = pdfW >= 800;
+    const leftC = warpPage(img, leftQuad, pdfW, Math.max(400, Math.min(2400, leftH)), doDewarp);
+    const rightC = warpPage(img, rightQuad, pdfW, Math.max(400, Math.min(2400, rightH)), doDewarp);
+    pages.push({ id: nextId('pg'), side: 'left', dataUrl: leftC.toDataURL('image/jpeg', state.quality) });
+    pages.push({ id: nextId('pg'), side: 'right', dataUrl: rightC.toDataURL('image/jpeg', state.quality) });
+    return pages;
+  }
+
+  function isLikelySinglePage(corners, spineX, w) {
+    // If spine too close to edge, treat as single
+    const xs = corners.map(c => c.x);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const t = (spineX - minX) / Math.max(1, maxX - minX);
+    return t < 0.18 || t > 0.82;
+  }
+
+  async function processPhotoSrc(src, name, time) {
+    const img = await loadImage(src);
+    const w = img.naturalWidth, h = img.naturalHeight;
+    let auto = detectBookAuto(img);
+    let dual = auto.dual !== false && !isLikelySinglePage(auto.corners, auto.spineX, w);
+    auto = { corners: auto.corners, spineX: auto.spineX, dual };
+    const pages = splitAndWarp(img, auto.corners, auto.spineX, dual);
+    return {
+      id: nextId('ph'),
+      name: name || 'photo',
+      time: time || Date.now(),
+      src,
+      w, h,
+      auto: JSON.parse(JSON.stringify(auto)),
+      manual: null,
+      pages
+    };
+  }
+
+  /* ----- Progress ----- */
+  function showProgress(show, title, cur, total) {
+    const p = $('#progressPanel');
+    if (!show) { p.classList.remove('show'); return; }
+    p.classList.add('show');
+    $('#progressTitle').textContent = title || '處理緊…';
+    const t = total || 1, c = cur || 0;
+    $('#progressFill').style.width = Math.round((c / t) * 100) + '%';
+    $('#progressText').textContent = `${c} / ${t}`;
+  }
+
+  async function yieldToUI() {
+    await new Promise(r => setTimeout(r, 16));
+  }
+
+  /* ----- Add photos ----- */
+  async function addFiles(fileList, replaceId) {
+    const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!files.length) { toast('搵唔到相片', 'warn'); return; }
+
+    // Build with times then sort
+    showProgress(true, '讀緊相片資訊…', 0, files.length);
+    const items = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      const t = await getCaptureTime(f);
+      const src = await fileToDataURL(f);
+      items.push({ file: f, src, time: t || f.lastModified || 0, name: f.name || ('img' + i) });
+      showProgress(true, '讀緊相片資訊…', i + 1, files.length);
+      await yieldToUI();
+    }
+    items.sort((a, b) => {
+      if (a.time !== b.time) return a.time - b.time;
+      return naturalName(a.name, b.name);
+    });
+
+    showProgress(true, '切割同拉直緊…', 0, items.length);
+    const newPhotos = [];
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const ph = await processPhotoSrc(items[i].src, items[i].name, items[i].time);
+        newPhotos.push(ph);
+      } catch (e) {
+        console.error(e);
+        toast('有張相處理唔到：' + items[i].name, 'err');
+      }
+      showProgress(true, `處理緊第 ${i + 1} / ${items.length} 張`, i + 1, items.length);
+      await yieldToUI();
+    }
+    showProgress(false);
+
+    if (replaceId) {
+      const idx = state.photos.findIndex(p => p.id === replaceId);
+      if (idx >= 0 && newPhotos[0]) {
+        state.photos[idx] = newPhotos[0];
+        toast('已補影取代');
+      }
+    } else {
+      state.photos.push(...newPhotos);
+      toast(`加咗 ${newPhotos.length} 張相`);
+    }
+    refreshStats();
+    showScreen('list');
+  }
+
+  async function addDataUrlCapture(dataUrl) {
+    showProgress(true, '處理緊呢張相…', 0, 1);
+    await yieldToUI();
+    try {
+      const ph = await processPhotoSrc(dataUrl, 'camera_' + Date.now() + '.jpg', Date.now());
+      state.photos.push(ph);
+      toast('已影低 · 可以繼續影');
+    } catch (e) {
+      console.error(e);
+      toast('處理失敗，試吓再影', 'err');
+    }
+    showProgress(false);
+    refreshStats();
+  }
+
+  /* ----- Camera ----- */
+  async function startCamera() {
+    stopCamera();
+    showScreen('camera');
+    const video = $('#camVideo');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: state.facing }, width: { ideal: 1920 }, height: { ideal: 1080 } }
+      });
+      state.stream = stream;
+      video.srcObject = stream;
+      await video.play();
+    } catch (e) {
+      console.warn(e);
+      toast('開唔到相機，可以用「系統相機」或者改上載', 'warn');
+    }
+  }
+
+  function stopCamera() {
+    if (state.stream) {
+      state.stream.getTracks().forEach(t => t.stop());
+      state.stream = null;
+    }
+    const v = $('#camVideo');
+    if (v) v.srcObject = null;
+  }
+
+  async function shutter() {
+    const video = $('#camVideo');
+    if (!state.stream || !video.videoWidth) {
+      toast('相機未就緒，試吓用系統相機', 'warn');
+      return;
+    }
+    const canvas = $('#camCanvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext('2d').drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    await addDataUrlCapture(dataUrl);
+  }
+
+  /* ----- List render ----- */
+  function sideLabel(side) {
+    if (side === 'left') return '左頁';
+    if (side === 'right') return '右頁';
+    return '單頁';
+  }
+
+  function renderList() {
+    const box = $('#photoList');
+    const empty = $('#listEmpty');
+    refreshStats();
+    if (!state.photos.length) {
+      box.innerHTML = '';
+      const e = document.createElement('div');
+      e.className = 'empty';
+      e.id = 'listEmpty';
+      e.textContent = '未有相。撳上面 ➕ 或者返去開相機／上載。';
+      box.appendChild(e);
+      if (state.sortable) { state.sortable.destroy(); state.sortable = null; }
+      return;
+    }
+    box.innerHTML = '';
+    state.photos.forEach((ph, idx) => {
+      const card = document.createElement('div');
+      card.className = 'photo-card';
+      card.dataset.id = ph.id;
+      const head = document.createElement('div');
+      head.className = 'photo-head';
+      head.innerHTML = `<span class="drag-handle" title="拖去調次序">☰</span>
+        <span class="photo-title">第 ${idx + 1} 張 · ${ph.pages.length} 頁</span>`;
+      const actions = document.createElement('div');
+      actions.style.display = 'flex';
+      actions.style.gap = '4px';
+      const btnAdj = document.createElement('button');
+      btnAdj.className = 'btn btn-sm btn-accent';
+      btnAdj.type = 'button';
+      btnAdj.textContent = '調整';
+      btnAdj.onclick = (e) => { e.stopPropagation(); openAdjust(ph.id); };
+      const btnRep = document.createElement('button');
+      btnRep.className = 'btn btn-sm btn-ghost';
+      btnRep.type = 'button';
+      btnRep.textContent = '補影';
+      btnRep.onclick = (e) => { e.stopPropagation(); state.replaceTarget = ph.id; $('#fileReplace').click(); };
+      const btnDel = document.createElement('button');
+      btnDel.className = 'btn btn-sm btn-danger';
+      btnDel.type = 'button';
+      btnDel.textContent = '刪除';
+      btnDel.onclick = (e) => {
+        e.stopPropagation();
+        state.photos = state.photos.filter(p => p.id !== ph.id);
+        toast('已刪除');
+        renderList();
+      };
+      actions.append(btnAdj, btnRep, btnDel);
+      head.appendChild(actions);
+      card.appendChild(head);
+
+      const row = document.createElement('div');
+      row.className = 'pages-row' + (ph.pages.length === 1 ? ' single' : '');
+      ph.pages.forEach(pg => {
+        const th = document.createElement('div');
+        th.className = 'page-thumb';
+        const badge = document.createElement('span');
+        badge.className = 'page-badge';
+        badge.textContent = sideLabel(pg.side);
+        const im = document.createElement('img');
+        im.src = pg.dataUrl;
+        im.alt = sideLabel(pg.side);
+        th.append(badge, im);
+        row.appendChild(th);
+      });
+      card.appendChild(row);
+      box.appendChild(card);
+    });
+
+    if (state.sortable) { try { state.sortable.destroy(); } catch (e) {} state.sortable = null; }
+    if (window.Sortable) {
+      state.sortable = Sortable.create(box, {
+        handle: '.drag-handle',
+        animation: 150,
+        ghostClass: 'dragging',
+        onEnd: () => {
+          const ids = $$('.photo-card', box).map(c => c.dataset.id);
+          state.photos.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+          renderList();
+          toast('次序已更新');
+        }
+      });
+    }
+  }
+
+  /* ----- Manual adjust ----- */
+  function openAdjust(photoId) {
+    const ph = state.photos.find(p => p.id === photoId);
+    if (!ph) return;
+    const base = ph.manual || ph.auto;
+    state.adjust = {
+      photoId,
+      corners: base.corners.map(c => ({ ...c })),
+      spineX: base.spineX,
+      dual: base.dual,
+      selected: 0,
+      img: null,
+      scale: 1,
+      ox: 0, oy: 0
+    };
+    $('#modalAdjust').classList.add('show');
+    loadImage(ph.src).then(img => {
+      state.adjust.img = img;
+      layoutAdjustCanvas();
+      drawAdjust();
+      updateAdjPreview();
+    });
+  }
+
+  function layoutAdjustCanvas() {
+    const wrap = $('#adjustWrap');
+    const canvas = $('#adjustCanvas');
+    const adj = state.adjust;
+    if (!adj || !adj.img) return;
+    const rw = wrap.clientWidth || 300;
+    const rh = Math.max(200, wrap.clientHeight || 240);
+    canvas.width = rw * devicePixelRatio;
+    canvas.height = rh * devicePixelRatio;
+    canvas.style.width = rw + 'px';
+    canvas.style.height = rh + 'px';
+    const img = adj.img;
+    const s = Math.min(rw / img.naturalWidth, rh / img.naturalHeight);
+    adj.scale = s;
+    adj.ox = (rw - img.naturalWidth * s) / 2;
+    adj.oy = (rh - img.naturalHeight * s) / 2;
+    adj.dpr = devicePixelRatio;
+  }
+
+  function toScreen(pt) {
+    const a = state.adjust;
+    return {
+      x: (a.ox + pt.x * a.scale) * a.dpr,
+      y: (a.oy + pt.y * a.scale) * a.dpr
+    };
+  }
+
+  function toImg(sx, sy) {
+    const a = state.adjust;
+    const x = (sx / a.dpr - a.ox) / a.scale;
+    const y = (sy / a.dpr - a.oy) / a.scale;
+    return { x, y };
+  }
+
+  function drawAdjust() {
+    const adj = state.adjust;
+    if (!adj || !adj.img) return;
+    const canvas = $('#adjustCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const dpr = adj.dpr;
+    ctx.drawImage(adj.img, adj.ox * dpr, adj.oy * dpr, adj.img.naturalWidth * adj.scale * dpr, adj.img.naturalHeight * adj.scale * dpr);
+
+    const c = adj.corners.map(toScreen);
+    ctx.strokeStyle = 'rgba(56,189,248,0.95)';
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(c[0].x, c[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+    ctx.closePath();
+    ctx.stroke();
+
+    // spine
+    const sp = spinePoints(adj.corners, adj.spineX);
+    const st = toScreen(sp.top), sb = toScreen(sp.bot);
+    ctx.strokeStyle = 'rgba(167,139,250,0.95)';
+    ctx.lineWidth = 3 * dpr;
+    ctx.setLineDash([6 * dpr, 4 * dpr]);
+    ctx.beginPath();
+    ctx.moveTo(st.x, st.y);
+    ctx.lineTo(sb.x, sb.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // corners
+    c.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, (i === adj.selected ? 12 : 9) * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = i === adj.selected ? '#38bdf8' : '#fff';
+      ctx.fill();
+      ctx.strokeStyle = '#0ea5e9';
+      ctx.lineWidth = 2 * dpr;
+      ctx.stroke();
+    });
+
+    // spine handle mid
+    ctx.beginPath();
+    ctx.arc((st.x + sb.x) / 2, (st.y + sb.y) / 2, 10 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = '#a78bfa';
+    ctx.fill();
+  }
+
+  let previewTimer = null;
+  function updateAdjPreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(doAdjPreview, 40);
+  }
+
+  async function doAdjPreview() {
+    const adj = state.adjust;
+    if (!adj || !adj.img) return;
+    const dual = adj.dual && !isLikelySinglePage(adj.corners, adj.spineX, adj.img.naturalWidth);
+    const prevW = state.pdfWidth;
+    state.pdfWidth = 600; // 預覽用細圖，快啲
+    let pages;
+    try { pages = splitAndWarp(adj.img, adj.corners, adj.spineX, dual); }
+    finally { state.pdfWidth = prevW; }
+    const box = $('#adjPreview');
+    box.className = 'preview-pages' + (pages.length === 1 ? ' single' : '');
+    const left = $('#prevLeft'), right = $('#prevRight');
+    async function paint(canvas, dataUrl) {
+      if (!dataUrl) { canvas.style.display = 'none'; return; }
+      canvas.style.display = 'block';
+      const im = await loadImage(dataUrl);
+      canvas.width = im.naturalWidth;
+      canvas.height = im.naturalHeight;
+      canvas.getContext('2d').drawImage(im, 0, 0);
+    }
+    if (pages.length === 1) {
+      await paint(left, pages[0].dataUrl);
+      right.style.display = 'none';
+    } else {
+      await paint(left, pages[0].dataUrl);
+      await paint(right, pages[1].dataUrl);
+    }
+  }
+
+  function hitTest(sx, sy) {
+    const adj = state.adjust;
+    const r = 18 * adj.dpr;
+    const c = adj.corners.map(toScreen);
+    for (let i = 0; i < 4; i++) {
+      if (Math.hypot(c[i].x - sx, c[i].y - sy) <= r) return { type: 'corner', i };
+    }
+    const sp = spinePoints(adj.corners, adj.spineX);
+    const st = toScreen(sp.top), sb = toScreen(sp.bot);
+    const mx = (st.x + sb.x) / 2, my = (st.y + sb.y) / 2;
+    if (Math.hypot(mx - sx, my - sy) <= r + 4) return { type: 'spine' };
+    // distance to spine segment
+    const dist = distToSeg(sx, sy, st.x, st.y, sb.x, sb.y);
+    if (dist < 14 * adj.dpr) return { type: 'spine' };
+    return null;
+  }
+
+  function distToSeg(px, py, x1, y1, x2, y2) {
+    const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
+    const dot = A * C + B * D;
+    const len = C * C + D * D || 1;
+    let t = Math.max(0, Math.min(1, dot / len));
+    const x = x1 + t * C, y = y1 + t * D;
+    return Math.hypot(px - x, py - y);
+  }
+
+  function bindAdjustPointer() {
+    const canvas = $('#adjustCanvas');
+    let drag = null;
+
+    function pos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      return {
+        x: (t.clientX - rect.left) * devicePixelRatio,
+        y: (t.clientY - rect.top) * devicePixelRatio
+      };
+    }
+
+    function onDown(e) {
+      if (!state.adjust) return;
+      e.preventDefault();
+      const p = pos(e);
+      const hit = hitTest(p.x, p.y);
+      if (!hit) return;
+      drag = hit;
+      if (hit.type === 'corner') state.adjust.selected = hit.i;
+      drawAdjust();
+    }
+    function onMove(e) {
+      if (!drag || !state.adjust) return;
+      e.preventDefault();
+      const p = pos(e);
+      const imgPt = toImg(p.x, p.y);
+      const img = state.adjust.img;
+      imgPt.x = Math.max(0, Math.min(img.naturalWidth, imgPt.x));
+      imgPt.y = Math.max(0, Math.min(img.naturalHeight, imgPt.y));
+      if (drag.type === 'corner') {
+        state.adjust.corners[drag.i] = imgPt;
+      } else if (drag.type === 'spine') {
+        state.adjust.spineX = imgPt.x;
+      }
+      drawAdjust();
+      updateAdjPreview();
+    }
+    function onUp() { drag = null; }
+
+    canvas.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    canvas.addEventListener('touchstart', onDown, { passive: false });
+    window.addEventListener('touchmove', onMove, { passive: false });
+    window.addEventListener('touchend', onUp);
+
+    window.addEventListener('keydown', (e) => {
+      if (!$('#modalAdjust').classList.contains('show') || !state.adjust) return;
+      const step = e.shiftKey ? 5 : 1;
+      const i = state.adjust.selected;
+      const c = state.adjust.corners[i];
+      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+        e.preventDefault();
+        if (e.key === 'ArrowLeft') c.x -= step;
+        if (e.key === 'ArrowRight') c.x += step;
+        if (e.key === 'ArrowUp') c.y -= step;
+        if (e.key === 'ArrowDown') c.y += step;
+        drawAdjust();
+        updateAdjPreview();
+      }
+    });
+
+    window.addEventListener('resize', () => {
+      if ($('#modalAdjust').classList.contains('show')) {
+        layoutAdjustCanvas();
+        drawAdjust();
+      }
+    });
+  }
+
+  function applyAdjust() {
+    const adj = state.adjust;
+    if (!adj) return;
+    const ph = state.photos.find(p => p.id === adj.photoId);
+    if (!ph) return;
+    const dual = adj.dual && !isLikelySinglePage(adj.corners, adj.spineX, adj.img.naturalWidth);
+    ph.manual = {
+      corners: adj.corners.map(c => ({ ...c })),
+      spineX: adj.spineX,
+      dual
+    };
+    showProgress(true, '套用切割…', 1, 1);
+    setTimeout(async () => {
+      ph.pages = splitAndWarp(adj.img, ph.manual.corners, ph.manual.spineX, dual);
+      showProgress(false);
+      $('#modalAdjust').classList.remove('show');
+      state.adjust = null;
+      renderList();
+      toast('已套用手動調整');
+    }, 30);
+  }
+
+  function resetAdjust() {
+    const adj = state.adjust;
+    if (!adj) return;
+    const ph = state.photos.find(p => p.id === adj.photoId);
+    if (!ph) return;
+    ph.manual = null;
+    adj.corners = ph.auto.corners.map(c => ({ ...c }));
+    adj.spineX = ph.auto.spineX;
+    adj.dual = ph.auto.dual;
+    drawAdjust();
+    updateAdjPreview();
+    toast('已重設返自動結果');
+  }
+
+  /* ----- PDF ----- */
+  async function exportPdf() {
+    if (!window.jspdf) {
+      toast('jsPDF 載入失敗，請檢查網絡後重新整理', 'err');
+      return;
+    }
+    const pages = [];
+    state.photos.forEach(ph => ph.pages.forEach(pg => pages.push(pg)));
+    if (!pages.length) { toast('未有頁面', 'warn'); return; }
+
+    showProgress(true, '產生 PDF 緊…', 0, pages.length);
+    const { jsPDF } = window.jspdf;
+    let doc = null;
+    for (let i = 0; i < pages.length; i++) {
+      const im = await loadImage(pages[i].dataUrl);
+      const w = im.naturalWidth, h = im.naturalHeight;
+      // A4-ish points: fit image
+      const orient = w >= h ? 'l' : 'p';
+      if (!doc) doc = new jsPDF({ orientation: orient, unit: 'pt', format: 'a4' });
+      else doc.addPage('a4', orient);
+      const pw = doc.internal.pageSize.getWidth();
+      const ph = doc.internal.pageSize.getHeight();
+      const scale = Math.min(pw / w, ph / h);
+      const dw = w * scale, dh = h * scale;
+      const ox = (pw - dw) / 2, oy = (ph - dh) / 2;
+      doc.addImage(pages[i].dataUrl, 'JPEG', ox, oy, dw, dh);
+      showProgress(true, '產生 PDF 緊…', i + 1, pages.length);
+      await yieldToUI();
+    }
+    doc.save('書本掃描.pdf');
+    showProgress(false);
+    toast('PDF 已下載');
+  }
+
+  /* ----- Events ----- */
+  function bindUI() {
+    $('#btnHomeSettings').onclick = () => $('#homeSettings').classList.toggle('open');
+    $('#setQuality').onchange = (e) => { state.quality = parseFloat(e.target.value); };
+    $('#setPdfWidth').onchange = (e) => { state.pdfWidth = parseInt(e.target.value, 10); };
+
+    $('#btnOpenCamera').onclick = () => startCamera();
+    $('#btnOpenUpload').onclick = () => $('#fileUpload').click();
+    $('#btnGoList').onclick = () => showScreen('list');
+
+    $('#btnCamBack').onclick = () => { stopCamera(); showScreen(state.photos.length ? 'list' : 'home'); };
+    $('#btnCamToList').onclick = () => { stopCamera(); showScreen('list'); };
+    $('#btnShutter').onclick = () => shutter();
+    $('#btnCamFlip').onclick = () => {
+      state.facing = state.facing === 'environment' ? 'user' : 'environment';
+      startCamera();
+    };
+    $('#btnCamFallback').onclick = () => $('#fileCapture').click();
+
+    $('#btnListHome').onclick = () => showScreen('home');
+    $('#btnListAdd').onclick = () => {
+      const bar = document.createElement('div');
+      bar.style.cssText = 'position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:150;display:flex;gap:8px;background:var(--card);padding:10px;border-radius:12px;border:1px solid var(--border)';
+      bar.innerHTML = '<button class="btn btn-sm btn-primary" type="button" id="tmpUp">🖼️ 上載</button><button class="btn btn-sm btn-ghost" type="button" id="tmpCam">📷 相機</button><button class="btn btn-sm btn-ghost" type="button" id="tmpX">關閉</button>';
+      document.body.appendChild(bar);
+      $('#tmpUp').onclick = () => { bar.remove(); $('#fileUpload').click(); };
+      $('#tmpCam').onclick = () => { bar.remove(); startCamera(); };
+      $('#tmpX').onclick = () => bar.remove();
+    };
+    $('#btnListCam').onclick = () => startCamera();
+    $('#btnExportPdf').onclick = () => exportPdf();
+
+    $('#btnAdjClose').onclick = () => { $('#modalAdjust').classList.remove('show'); state.adjust = null; };
+    $('#btnAdjReset').onclick = () => resetAdjust();
+    $('#btnAdjApply').onclick = () => applyAdjust();
+
+    $('#fileUpload').onchange = (e) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      addFiles(files);
+    };
+    $('#fileCapture').onchange = (e) => {
+      const files = Array.from(e.target.files || []);
+      e.target.value = '';
+      addFiles(files);
+    };
+    $('#fileReplace').onchange = (e) => {
+      const files = Array.from(e.target.files || []);
+      const id = state.replaceTarget;
+      state.replaceTarget = null;
+      e.target.value = '';
+      if (files[0]) addFiles(files, id);
+    };
+
+    bindAdjustPointer();
+  }
+
+  /* ----- Init ----- */
+  async function init() {
+    bindUI();
+    updateLibStatus();
+    refreshStats();
+    // Sortable / jspdf / exifr already via script tags
+    setTimeout(updateLibStatus, 500);
+    loadOpenCV().then(() => {
+      updateLibStatus();
+      if (!state.opencvReady) toast('OpenCV 載入唔到，會用後備切割（仍然可手動調）', 'warn');
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
+</script>
+</body>
+</html>
