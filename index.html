@@ -59,11 +59,12 @@ button,input{font-family:inherit}
 .list-stats{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;flex-shrink:0}
 .chip{background:var(--card);border:1px solid var(--border);border-radius:999px;padding:4px 10px;font-size:.8rem;color:var(--muted)}
 .chip strong{color:var(--text)}
-.photo-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;display:flex;flex-direction:column;gap:12px;padding-bottom:8px;min-height:0}
-.photo-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px;touch-action:none}
+.photo-list{flex:1 1 0;height:0;overflow-y:scroll;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;flex-direction:column;gap:12px;padding-bottom:24px;min-height:0;touch-action:pan-y}
+.photo-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px;touch-action:pan-y}
 .photo-card.dragging{opacity:.85;border-color:var(--primary);box-shadow:0 8px 24px rgba(0,0,0,.35)}
-.photo-head{display:flex;align-items:center;gap:8px;margin-bottom:8px}
-.drag-handle{cursor:grab;color:var(--muted);font-size:1.1rem;padding:4px 6px;user-select:none}
+.photo-head{display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.photo-head .actions{display:flex;gap:4px;flex-wrap:wrap;width:100%}
+.drag-handle{cursor:grab;color:var(--muted);font-size:1.25rem;padding:8px 10px;user-select:none;touch-action:none;-webkit-user-select:none}
 .photo-title{flex:1;font-size:.85rem;font-weight:600}
 .pages-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .pages-row.single{grid-template-columns:1fr}
@@ -106,6 +107,11 @@ button,input{font-family:inherit}
 .lib-status.fail{color:var(--danger)}
 .empty{text-align:center;color:var(--muted);padding:40px 16px;font-size:.9rem}
 .kbd-hint{font-size:.7rem;color:var(--muted);text-align:center;margin-top:4px}
+.mode-toggle{display:flex;gap:6px;flex-shrink:0}
+.mode-toggle .btn{flex:1}
+.mode-toggle .btn.on{background:var(--primary);color:#0f172a;border-color:var(--primary)}
+.zoom-fab{position:absolute;right:8px;bottom:8px;display:flex;gap:6px;z-index:5}
+.zoom-fab .btn{width:40px;height:40px;padding:0;border-radius:10px;background:rgba(15,23,42,.8);border:1px solid var(--border)}
 @media(max-width:360px){
   .btn{padding:10px 12px;font-size:.88rem}
   .shutter{width:60px;height:60px}
@@ -188,12 +194,14 @@ button,input{font-family:inherit}
   <div class="list-stats">
     <span class="chip">相 <strong id="statPhotos">0</strong></span>
     <span class="chip">頁 <strong id="statPages">0</strong></span>
+    <span class="chip" style="flex:1;min-width:140px">只暫存在瀏覽器，關頁就冇</span>
   </div>
   <div class="photo-list" id="photoList">
     <div class="empty" id="listEmpty">未有相。撳上面 ➕ 或者返去開相機／上載。</div>
   </div>
   <div class="bottom-bar">
     <button class="btn btn-ghost" id="btnListCam" type="button">📷 影多啲</button>
+    <button class="btn btn-danger btn-sm" id="btnClearAll" type="button">清空</button>
     <button class="btn btn-ok btn-block" id="btnExportPdf" type="button" disabled>📄 輸出 PDF</button>
   </div>
 </section>
@@ -206,9 +214,18 @@ button,input{font-family:inherit}
       <h1>手動調整</h1>
       <button class="btn btn-sm btn-ghost" id="btnAdjReset" type="button">重設</button>
     </div>
+    <div class="mode-toggle" id="adjModeToggle">
+      <button class="btn btn-sm btn-ghost" type="button" data-mode="dual" id="btnModeDual">📖 左右兩頁</button>
+      <button class="btn btn-sm btn-ghost" type="button" data-mode="single" id="btnModeSingle">📄 淨係一頁</button>
+    </div>
     <div class="adjust-stage">
       <div class="adjust-canvas-wrap" id="adjustWrap">
         <canvas id="adjustCanvas"></canvas>
+        <div class="zoom-fab">
+          <button class="btn" type="button" id="btnZoomOut" title="縮小">−</button>
+          <button class="btn" type="button" id="btnZoomIn" title="放大">＋</button>
+          <button class="btn" type="button" id="btnZoomReset" title="重設畫面">1:1</button>
+        </div>
       </div>
       <div class="preview-wrap">
         <h3>即時預覽（左 → 右）</h3>
@@ -218,7 +235,7 @@ button,input{font-family:inherit}
         </div>
       </div>
     </div>
-    <p class="kbd-hint">拖四個角點同紫色書脊線 · 電腦可用方向鍵微調角點（先撳選中）</p>
+    <p class="kbd-hint">拖藍點調四角 · 紫線＝書脊（單頁會收埋）· 雙指撐開放大／拖移 · ＋− 掣都得</p>
     <div class="bottom-bar">
       <button class="btn btn-primary btn-block" id="btnAdjApply" type="button">✅ 用呢個結果</button>
     </div>
@@ -445,9 +462,63 @@ button,input{font-family:inherit}
   }
 
   function detectFallback(img, w, h) {
+    // 無 OpenCV：用亮度搵紙面範圍，避免連地板都切入
+    try {
+      const c = document.createElement('canvas');
+      const maxSide = 480;
+      const scale = Math.min(1, maxSide / Math.max(w, h));
+      const sw = Math.round(w * scale), sh = Math.round(h * scale);
+      c.width = sw; c.height = sh;
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0, sw, sh);
+      const data = ctx.getImageData(0, 0, sw, sh).data;
+      let sum = 0;
+      for (let i = 0; i < data.length; i += 16) {
+        sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+      }
+      const mean = sum / (data.length / 16);
+      const thr = mean + 18;
+      let minX = sw, minY = sh, maxX = 0, maxY = 0, hit = 0;
+      for (let y = 0; y < sh; y += 2) {
+        for (let x = 0; x < sw; x += 2) {
+          const i = (y * sw + x) * 4;
+          const g = (data[i] + data[i + 1] + data[i + 2]) / 3;
+          if (g > thr) {
+            hit++;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (hit > (sw * sh) * 0.04) {
+        const pad = Math.round(Math.min(sw, sh) * 0.01);
+        minX = Math.max(0, minX - pad) / scale;
+        minY = Math.max(0, minY - pad) / scale;
+        maxX = Math.min(sw - 1, maxX + pad) / scale;
+        maxY = Math.min(sh - 1, maxY + pad) / scale;
+        const corners = [
+          { x: minX, y: minY }, { x: maxX, y: minY },
+          { x: maxX, y: maxY }, { x: minX, y: maxY }
+        ];
+        const bw = maxX - minX, bh = maxY - minY;
+        const dual = guessDual(bw, bh, w * 0.5, minX, maxX);
+        return { corners, spineX: (minX + maxX) / 2, dual };
+      }
+    } catch (e) { /* fall through */ }
     const corners = defaultCorners(w, h);
-    const spineX = w * 0.5;
-    return { corners, spineX, dual: true };
+    return { corners, spineX: w * 0.5, dual: guessDual(w, h, w * 0.5, 0, w) };
+  }
+
+  function guessDual(bw, bh, spineX, minX, maxX) {
+    // 打開嘅書通常橫向闊過高；單頁／封面多數直向或者書脊好貼邊
+    const aspect = bw / Math.max(1, bh);
+    const t = (spineX - minX) / Math.max(1, maxX - minX);
+    if (aspect < 1.05) return false; // 直向 → 單頁
+    if (t < 0.28 || t > 0.72) return false;
+    if (aspect >= 1.2) return true;
+    return aspect >= 1.1;
   }
 
   function detectWithOpenCV(img, w, h) {
@@ -456,62 +527,112 @@ button,input{font-family:inherit}
     const sw = Math.round(w * scale), sh = Math.round(h * scale);
     const canvas = document.createElement('canvas');
     canvas.width = sw; canvas.height = sh;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(img, 0, 0, sw, sh);
+    canvas.getContext('2d').drawImage(img, 0, 0, sw, sh);
 
     let src = cv.imread(canvas);
     let gray = new cv.Mat();
     let blur = new cv.Mat();
+    let bright = new cv.Mat();
     let edges = new cv.Mat();
     let dil = new cv.Mat();
+    let morph = new cv.Mat();
     cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
     cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 50, 150);
-    const k = cv.Mat.ones(3, 3, cv.CV_8U);
-    cv.dilate(edges, dil, k);
-    k.delete();
 
-    let contours = new cv.MatVector();
-    let hierarchy = new cv.Mat();
-    cv.findContours(dil, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+    // 1) 紙面通常靚過地板：用 Otsu／高亮度 mask 搵書頁
+    cv.threshold(blur, bright, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU);
+    // 如果 Otsu 揀咗暗底，反轉
+    const meanBright = cv.mean(bright)[0];
+    if (meanBright < 127) cv.bitwise_not(bright, bright);
+    const k5 = cv.Mat.ones(5, 5, cv.CV_8U);
+    cv.morphologyEx(bright, morph, cv.MORPH_CLOSE, k5);
+    cv.morphologyEx(morph, morph, cv.MORPH_OPEN, k5);
 
-    let best = null, bestArea = 0;
-    const imgArea = sw * sh;
-    for (let i = 0; i < contours.size(); i++) {
-      const cnt = contours.get(i);
-      const peri = cv.arcLength(cnt, true);
-      let approx = new cv.Mat();
-      cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-      if (approx.rows === 4) {
-        const area = cv.contourArea(approx);
-        if (area > imgArea * 0.12 && area > bestArea) {
-          bestArea = area;
-          if (best) best.delete();
-          best = approx;
-        } else approx.delete();
-      } else approx.delete();
+    function bestQuadFrom(binMat) {
+      let contours = new cv.MatVector();
+      let hierarchy = new cv.Mat();
+      cv.findContours(binMat, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      let best = null, bestScore = 0;
+      const imgArea = sw * sh;
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+        if (area < imgArea * 0.08 || area > imgArea * 0.98) continue;
+        const peri = cv.arcLength(cnt, true);
+        let approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.025 * peri, true);
+        let ptsMat = approx;
+        if (approx.rows !== 4) {
+          // 用最小外接矩形做四角
+          const rect = cv.minAreaRect(cnt);
+          ptsMat = new cv.Mat();
+          cv.boxPoints(rect, ptsMat);
+          approx.delete();
+        }
+        if (ptsMat.rows === 4 || ptsMat.cols === 4 || ptsMat.total() >= 4) {
+          const score = area;
+          if (score > bestScore) {
+            bestScore = score;
+            if (best) best.delete();
+            best = ptsMat;
+          } else ptsMat.delete();
+        } else {
+          ptsMat.delete();
+        }
+      }
+      contours.delete(); hierarchy.delete();
+      return best;
     }
+
+    let best = bestQuadFrom(morph);
+    // 2) 後備：Canny 邊緣
+    if (!best) {
+      cv.Canny(blur, edges, 40, 120);
+      const k = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.dilate(edges, dil, k);
+      k.delete();
+      best = bestQuadFrom(dil);
+    }
+    k5.delete();
 
     let corners;
     if (best) {
       const pts = [];
-      for (let i = 0; i < 4; i++) {
-        pts.push({ x: best.data32S[i * 2] / scale, y: best.data32S[i * 2 + 1] / scale });
-      }
+      let arr = null;
+      try {
+        if (best.data32F && best.data32F.length >= 8) arr = Array.from(best.data32F.subarray(0, 8));
+        else if (best.data32S && best.data32S.length >= 8) arr = Array.from(best.data32S.subarray(0, 8));
+      } catch (e) { arr = null; }
       best.delete();
-      corners = orderCorners(pts);
+      if (arr) {
+        for (let i = 0; i < 4; i++) pts.push({ x: arr[i * 2] / scale, y: arr[i * 2 + 1] / scale });
+        corners = orderCorners(pts);
+        const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+        const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+        corners = corners.map(pt => ({
+          x: pt.x + (cx - pt.x) * 0.02,
+          y: pt.y + (cy - pt.y) * 0.02
+        }));
+      } else {
+        corners = detectFallback(img, w, h).corners;
+      }
     } else {
-      corners = defaultCorners(w, h);
+      corners = detectFallback(img, w, h).corners;
     }
 
-    // Spine: vertical intensity variance in middle of book region
-    const spineX = findSpine(gray, scale, corners, w, h, sw, sh);
+    const spineInfo = findSpine(gray, scale, corners, w, h, sw, sh);
+    const spineX = typeof spineInfo === 'object' ? spineInfo.x : spineInfo;
+    const spineScore = typeof spineInfo === 'object' ? spineInfo.score : 0;
 
-    // Heuristic: if book is very narrow or contour weak, still dual if aspect looks like open book
-    const dual = true;
+    const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
+    const bw = Math.max(...xs) - Math.min(...xs);
+    const bh = Math.max(...ys) - Math.min(...ys);
+    let dual = guessDual(bw, bh, spineX, Math.min(...xs), Math.max(...xs));
+    // 書脊訊號太弱 → 傾向單頁
+    if (dual && spineScore > 0 && spineScore < (sh * 8)) dual = false;
 
-    src.delete(); gray.delete(); blur.delete(); edges.delete(); dil.delete();
-    contours.delete(); hierarchy.delete();
+    src.delete(); gray.delete(); blur.delete(); bright.delete();
+    edges.delete(); dil.delete(); morph.delete();
 
     return { corners, spineX, dual };
   }
@@ -525,7 +646,6 @@ button,input{font-family:inherit}
   }
 
   function findSpine(grayMat, scale, corners, w, h, sw, sh) {
-    // Sample vertical gradient energy along x in book center band
     try {
       const xs = corners.map(c => c.x * scale);
       const ys = corners.map(c => c.y * scale);
@@ -533,8 +653,8 @@ button,input{font-family:inherit}
       const maxX = Math.min(sw - 1, Math.ceil(Math.max(...xs)));
       const minY = Math.max(0, Math.floor(Math.min(...ys)));
       const maxY = Math.min(sh - 1, Math.ceil(Math.max(...ys)));
-      const x0 = Math.floor(minX + (maxX - minX) * 0.35);
-      const x1 = Math.ceil(minX + (maxX - minX) * 0.65);
+      const x0 = Math.floor(minX + (maxX - minX) * 0.32);
+      const x1 = Math.ceil(minX + (maxX - minX) * 0.68);
       let bestX = Math.floor((minX + maxX) / 2), bestScore = -1;
       for (let x = x0; x <= x1; x++) {
         let score = 0;
@@ -543,14 +663,13 @@ button,input{font-family:inherit}
           const l = grayMat.data[i - 1], r = grayMat.data[i + 1];
           score += Math.abs(r - l);
         }
-        // Prefer near center slightly
-        const centerBias = 1 - Math.abs((x - (minX + maxX) / 2) / ((maxX - minX) / 2 + 1)) * 0.15;
+        const centerBias = 1 - Math.abs((x - (minX + maxX) / 2) / ((maxX - minX) / 2 + 1)) * 0.12;
         score *= centerBias;
         if (score > bestScore) { bestScore = score; bestX = x; }
       }
-      return bestX / scale;
+      return { x: bestX / scale, score: bestScore };
     } catch (e) {
-      return w * 0.5;
+      return { x: w * 0.5, score: 0 };
     }
   }
 
@@ -771,8 +890,10 @@ button,input{font-family:inherit}
     const img = await loadImage(src);
     const w = img.naturalWidth, h = img.naturalHeight;
     let auto = detectBookAuto(img);
-    let dual = auto.dual !== false && !isLikelySinglePage(auto.corners, auto.spineX, w);
-    auto = { corners: auto.corners, spineX: auto.spineX, dual };
+    const spineX = (auto.spineX && typeof auto.spineX === 'object') ? auto.spineX.x : auto.spineX;
+    let dual = !!auto.dual;
+    if (dual && isLikelySinglePage(auto.corners, spineX, w)) dual = false;
+    auto = { corners: auto.corners, spineX: spineX, dual };
     const pages = splitAndWarp(img, auto.corners, auto.spineX, dual);
     return {
       id: nextId('ph'),
@@ -908,6 +1029,31 @@ button,input{font-family:inherit}
     await addDataUrlCapture(dataUrl);
   }
 
+  async function setPhotoMode(photoId, dual) {
+    const ph = state.photos.find(p => p.id === photoId);
+    if (!ph) return;
+    showProgress(true, dual ? '切左右頁…' : '合併做單頁…', 1, 1);
+    await yieldToUI();
+    try {
+      const img = await loadImage(ph.src);
+      const base = ph.manual || ph.auto;
+      const corners = base.corners.map(c => ({ ...c }));
+      const spineX = base.spineX;
+      if (ph.manual) {
+        ph.manual = { corners, spineX, dual: !!dual };
+      } else {
+        ph.auto = { ...ph.auto, corners, spineX, dual: !!dual };
+      }
+      ph.pages = splitAndWarp(img, corners, spineX, !!dual);
+      toast(dual ? '已改做左右兩頁' : '已合併做單頁');
+    } catch (e) {
+      console.error(e);
+      toast('切換失敗', 'err');
+    }
+    showProgress(false);
+    renderList();
+  }
+
   /* ----- List render ----- */
   function sideLabel(side) {
     if (side === 'left') return '左頁';
@@ -926,7 +1072,7 @@ button,input{font-family:inherit}
       e.id = 'listEmpty';
       e.textContent = '未有相。撳上面 ➕ 或者返去開相機／上載。';
       box.appendChild(e);
-      if (state.sortable) { state.sortable.destroy(); state.sortable = null; }
+      if (state.sortable) { try { state.sortable.destroy(); } catch (e) {} state.sortable = null; }
       return;
     }
     box.innerHTML = '';
@@ -936,11 +1082,16 @@ button,input{font-family:inherit}
       card.dataset.id = ph.id;
       const head = document.createElement('div');
       head.className = 'photo-head';
+      const isDual = !!(ph.manual || ph.auto).dual;
       head.innerHTML = `<span class="drag-handle" title="拖去調次序">☰</span>
-        <span class="photo-title">第 ${idx + 1} 張 · ${ph.pages.length} 頁</span>`;
+        <span class="photo-title">第 ${idx + 1} 張 · ${isDual ? '左右兩頁' : '單頁'}</span>`;
       const actions = document.createElement('div');
-      actions.style.display = 'flex';
-      actions.style.gap = '4px';
+      actions.className = 'actions';
+      const btnMode = document.createElement('button');
+      btnMode.className = 'btn btn-sm ' + (isDual ? 'btn-ghost' : 'btn-primary');
+      btnMode.type = 'button';
+      btnMode.textContent = isDual ? '改單頁' : '改雙頁';
+      btnMode.onclick = (e) => { e.stopPropagation(); setPhotoMode(ph.id, !isDual); };
       const btnAdj = document.createElement('button');
       btnAdj.className = 'btn btn-sm btn-accent';
       btnAdj.type = 'button';
@@ -961,7 +1112,7 @@ button,input{font-family:inherit}
         toast('已刪除');
         renderList();
       };
-      actions.append(btnAdj, btnRep, btnDel);
+      actions.append(btnMode, btnAdj, btnRep, btnDel);
       head.appendChild(actions);
       card.appendChild(head);
 
@@ -989,6 +1140,9 @@ button,input{font-family:inherit}
         handle: '.drag-handle',
         animation: 150,
         ghostClass: 'dragging',
+        delay: 120,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 6,
         onEnd: () => {
           const ids = $$('.photo-card', box).map(c => c.dataset.id);
           state.photos.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
@@ -1000,6 +1154,14 @@ button,input{font-family:inherit}
   }
 
   /* ----- Manual adjust ----- */
+  function syncAdjModeButtons() {
+    const adj = state.adjust;
+    if (!adj) return;
+    const d = $('#btnModeDual'), s = $('#btnModeSingle');
+    if (d) d.classList.toggle('on', !!adj.dual);
+    if (s) s.classList.toggle('on', !adj.dual);
+  }
+
   function openAdjust(photoId) {
     const ph = state.photos.find(p => p.id === photoId);
     if (!ph) return;
@@ -1008,14 +1170,21 @@ button,input{font-family:inherit}
       photoId,
       corners: base.corners.map(c => ({ ...c })),
       spineX: base.spineX,
-      dual: base.dual,
+      dual: !!base.dual,
       selected: 0,
       img: null,
+      fitScale: 1,
+      zoom: 1,
+      panX: 0,
+      panY: 0,
+      ox: 0, oy: 0,
       scale: 1,
-      ox: 0, oy: 0
+      dpr: devicePixelRatio
     };
     $('#modalAdjust').classList.add('show');
+    syncAdjModeButtons();
     loadImage(ph.src).then(img => {
+      if (!state.adjust || state.adjust.photoId !== photoId) return;
       state.adjust.img = img;
       layoutAdjustCanvas();
       drawAdjust();
@@ -1029,17 +1198,19 @@ button,input{font-family:inherit}
     const adj = state.adjust;
     if (!adj || !adj.img) return;
     const rw = wrap.clientWidth || 300;
-    const rh = Math.max(200, wrap.clientHeight || 240);
-    canvas.width = rw * devicePixelRatio;
-    canvas.height = rh * devicePixelRatio;
+    const rh = Math.max(220, wrap.clientHeight || 260);
+    adj.dpr = devicePixelRatio || 1;
+    canvas.width = Math.round(rw * adj.dpr);
+    canvas.height = Math.round(rh * adj.dpr);
     canvas.style.width = rw + 'px';
     canvas.style.height = rh + 'px';
     const img = adj.img;
-    const s = Math.min(rw / img.naturalWidth, rh / img.naturalHeight);
-    adj.scale = s;
-    adj.ox = (rw - img.naturalWidth * s) / 2;
-    adj.oy = (rh - img.naturalHeight * s) / 2;
-    adj.dpr = devicePixelRatio;
+    adj.fitScale = Math.min(rw / img.naturalWidth, rh / img.naturalHeight);
+    adj.scale = adj.fitScale * (adj.zoom || 1);
+    adj.ox = (rw - img.naturalWidth * adj.scale) / 2 + (adj.panX || 0);
+    adj.oy = (rh - img.naturalHeight * adj.scale) / 2 + (adj.panY || 0);
+    adj.viewW = rw;
+    adj.viewH = rh;
   }
 
   function toScreen(pt) {
@@ -1052,9 +1223,32 @@ button,input{font-family:inherit}
 
   function toImg(sx, sy) {
     const a = state.adjust;
-    const x = (sx / a.dpr - a.ox) / a.scale;
-    const y = (sy / a.dpr - a.oy) / a.scale;
-    return { x, y };
+    return {
+      x: (sx / a.dpr - a.ox) / a.scale,
+      y: (sy / a.dpr - a.oy) / a.scale
+    };
+  }
+
+  function setAdjustZoom(newZoom, centerCssX, centerCssY) {
+    const adj = state.adjust;
+    if (!adj || !adj.img) return;
+    const z0 = adj.zoom || 1;
+    const z1 = Math.max(1, Math.min(6, newZoom));
+    if (Math.abs(z1 - z0) < 1e-4) return;
+    const rw = adj.viewW, rh = adj.viewH;
+    const cx = centerCssX != null ? centerCssX : rw / 2;
+    const cy = centerCssY != null ? centerCssY : rh / 2;
+    // keep the image point under (cx,cy) stable
+    const imgPt = {
+      x: (cx - ((rw - adj.img.naturalWidth * adj.fitScale * z0) / 2 + adj.panX)) / (adj.fitScale * z0),
+      y: (cy - ((rh - adj.img.naturalHeight * adj.fitScale * z0) / 2 + adj.panY)) / (adj.fitScale * z0)
+    };
+    adj.zoom = z1;
+    adj.scale = adj.fitScale * z1;
+    adj.panX = cx - (rw - adj.img.naturalWidth * adj.scale) / 2 - imgPt.x * adj.scale;
+    adj.panY = cy - (rh - adj.img.naturalHeight * adj.scale) / 2 - imgPt.y * adj.scale;
+    layoutAdjustCanvas();
+    drawAdjust();
   }
 
   function drawAdjust() {
@@ -1062,64 +1256,69 @@ button,input{font-family:inherit}
     if (!adj || !adj.img) return;
     const canvas = $('#adjustCanvas');
     const ctx = canvas.getContext('2d');
+    const dpr = adj.dpr;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const dpr = adj.dpr;
-    ctx.drawImage(adj.img, adj.ox * dpr, adj.oy * dpr, adj.img.naturalWidth * adj.scale * dpr, adj.img.naturalHeight * adj.scale * dpr);
+    ctx.drawImage(
+      adj.img,
+      adj.ox * dpr, adj.oy * dpr,
+      adj.img.naturalWidth * adj.scale * dpr,
+      adj.img.naturalHeight * adj.scale * dpr
+    );
 
     const c = adj.corners.map(toScreen);
     ctx.strokeStyle = 'rgba(56,189,248,0.95)';
-    ctx.lineWidth = 2 * dpr;
+    ctx.lineWidth = 2.5 * dpr;
     ctx.beginPath();
     ctx.moveTo(c[0].x, c[0].y);
     for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
     ctx.closePath();
     ctx.stroke();
 
-    // spine
-    const sp = spinePoints(adj.corners, adj.spineX);
-    const st = toScreen(sp.top), sb = toScreen(sp.bot);
-    ctx.strokeStyle = 'rgba(167,139,250,0.95)';
-    ctx.lineWidth = 3 * dpr;
-    ctx.setLineDash([6 * dpr, 4 * dpr]);
-    ctx.beginPath();
-    ctx.moveTo(st.x, st.y);
-    ctx.lineTo(sb.x, sb.y);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // corners
-    c.forEach((p, i) => {
+    if (adj.dual) {
+      const sp = spinePoints(adj.corners, adj.spineX);
+      const st = toScreen(sp.top), sb = toScreen(sp.bot);
+      ctx.strokeStyle = 'rgba(167,139,250,0.95)';
+      ctx.lineWidth = 3 * dpr;
+      ctx.setLineDash([6 * dpr, 4 * dpr]);
       ctx.beginPath();
-      ctx.arc(p.x, p.y, (i === adj.selected ? 12 : 9) * dpr, 0, Math.PI * 2);
+      ctx.moveTo(st.x, st.y);
+      ctx.lineTo(sb.x, sb.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.arc((st.x + sb.x) / 2, (st.y + sb.y) / 2, 14 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = '#a78bfa';
+      ctx.fill();
+    }
+
+    // 大啲嘅角點，手指易撳
+    c.forEach((p, i) => {
+      const rad = (i === adj.selected ? 16 : 14) * dpr;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
       ctx.fillStyle = i === adj.selected ? '#38bdf8' : '#fff';
       ctx.fill();
       ctx.strokeStyle = '#0ea5e9';
-      ctx.lineWidth = 2 * dpr;
+      ctx.lineWidth = 2.5 * dpr;
       ctx.stroke();
     });
-
-    // spine handle mid
-    ctx.beginPath();
-    ctx.arc((st.x + sb.x) / 2, (st.y + sb.y) / 2, 10 * dpr, 0, Math.PI * 2);
-    ctx.fillStyle = '#a78bfa';
-    ctx.fill();
   }
 
   let previewTimer = null;
   function updateAdjPreview() {
     clearTimeout(previewTimer);
-    previewTimer = setTimeout(doAdjPreview, 40);
+    previewTimer = setTimeout(doAdjPreview, 50);
   }
 
   async function doAdjPreview() {
     const adj = state.adjust;
     if (!adj || !adj.img) return;
-    const dual = adj.dual && !isLikelySinglePage(adj.corners, adj.spineX, adj.img.naturalWidth);
+    const dual = !!adj.dual;
     const prevW = state.pdfWidth;
-    state.pdfWidth = 600; // 預覽用細圖，快啲
+    state.pdfWidth = 600;
     let pages;
     try { pages = splitAndWarp(adj.img, adj.corners, adj.spineX, dual); }
     finally { state.pdfWidth = prevW; }
@@ -1138,6 +1337,7 @@ button,input{font-family:inherit}
       await paint(left, pages[0].dataUrl);
       right.style.display = 'none';
     } else {
+      right.style.display = 'block';
       await paint(left, pages[0].dataUrl);
       await paint(right, pages[1].dataUrl);
     }
@@ -1145,70 +1345,118 @@ button,input{font-family:inherit}
 
   function hitTest(sx, sy) {
     const adj = state.adjust;
-    const r = 18 * adj.dpr;
+    const r = 28 * adj.dpr; // 大 hit 區
     const c = adj.corners.map(toScreen);
     for (let i = 0; i < 4; i++) {
       if (Math.hypot(c[i].x - sx, c[i].y - sy) <= r) return { type: 'corner', i };
     }
-    const sp = spinePoints(adj.corners, adj.spineX);
-    const st = toScreen(sp.top), sb = toScreen(sp.bot);
-    const mx = (st.x + sb.x) / 2, my = (st.y + sb.y) / 2;
-    if (Math.hypot(mx - sx, my - sy) <= r + 4) return { type: 'spine' };
-    // distance to spine segment
-    const dist = distToSeg(sx, sy, st.x, st.y, sb.x, sb.y);
-    if (dist < 14 * adj.dpr) return { type: 'spine' };
+    if (adj.dual) {
+      const sp = spinePoints(adj.corners, adj.spineX);
+      const st = toScreen(sp.top), sb = toScreen(sp.bot);
+      const mx = (st.x + sb.x) / 2, my = (st.y + sb.y) / 2;
+      if (Math.hypot(mx - sx, my - sy) <= r + 6) return { type: 'spine' };
+      if (distToSeg(sx, sy, st.x, st.y, sb.x, sb.y) < 18 * adj.dpr) return { type: 'spine' };
+    }
     return null;
   }
 
   function distToSeg(px, py, x1, y1, x2, y2) {
     const A = px - x1, B = py - y1, C = x2 - x1, D = y2 - y1;
-    const dot = A * C + B * D;
     const len = C * C + D * D || 1;
-    let t = Math.max(0, Math.min(1, dot / len));
-    const x = x1 + t * C, y = y1 + t * D;
-    return Math.hypot(px - x, py - y);
+    let t = Math.max(0, Math.min(1, (A * C + B * D) / len));
+    return Math.hypot(px - (x1 + t * C), py - (y1 + t * D));
   }
 
   function bindAdjustPointer() {
     const canvas = $('#adjustCanvas');
     let drag = null;
+    let pinch = null;
+    let panDrag = null;
 
     function pos(e) {
       const rect = canvas.getBoundingClientRect();
-      const t = e.touches ? e.touches[0] : e;
+      const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
       return {
-        x: (t.clientX - rect.left) * devicePixelRatio,
-        y: (t.clientY - rect.top) * devicePixelRatio
+        x: (t.clientX - rect.left) * (state.adjust ? state.adjust.dpr : devicePixelRatio),
+        y: (t.clientY - rect.top) * (state.adjust ? state.adjust.dpr : devicePixelRatio),
+        cssX: t.clientX - rect.left,
+        cssY: t.clientY - rect.top
+      };
+    }
+
+    function touchDist(e) {
+      const rect = canvas.getBoundingClientRect();
+      const a = e.touches[0], b = e.touches[1];
+      return {
+        d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+        cx: ((a.clientX + b.clientX) / 2) - rect.left,
+        cy: ((a.clientY + b.clientY) / 2) - rect.top
       };
     }
 
     function onDown(e) {
       if (!state.adjust) return;
+      if (e.touches && e.touches.length === 2) {
+        e.preventDefault();
+        drag = null;
+        panDrag = null;
+        const td = touchDist(e);
+        pinch = { d0: td.d, z0: state.adjust.zoom || 1, cx: td.cx, cy: td.cy, panX0: state.adjust.panX, panY0: state.adjust.panY };
+        return;
+      }
       e.preventDefault();
       const p = pos(e);
       const hit = hitTest(p.x, p.y);
-      if (!hit) return;
-      drag = hit;
-      if (hit.type === 'corner') state.adjust.selected = hit.i;
-      drawAdjust();
-    }
-    function onMove(e) {
-      if (!drag || !state.adjust) return;
-      e.preventDefault();
-      const p = pos(e);
-      const imgPt = toImg(p.x, p.y);
-      const img = state.adjust.img;
-      imgPt.x = Math.max(0, Math.min(img.naturalWidth, imgPt.x));
-      imgPt.y = Math.max(0, Math.min(img.naturalHeight, imgPt.y));
-      if (drag.type === 'corner') {
-        state.adjust.corners[drag.i] = imgPt;
-      } else if (drag.type === 'spine') {
-        state.adjust.spineX = imgPt.x;
+      if (hit) {
+        drag = hit;
+        if (hit.type === 'corner') state.adjust.selected = hit.i;
+        drawAdjust();
+        return;
       }
-      drawAdjust();
-      updateAdjPreview();
+      // 單指喺空白位拖＝平移（放大後尤甚）
+      if ((state.adjust.zoom || 1) > 1.02) {
+        panDrag = { x: p.cssX, y: p.cssY, panX0: state.adjust.panX, panY0: state.adjust.panY };
+      }
     }
-    function onUp() { drag = null; }
+
+    function onMove(e) {
+      if (!state.adjust) return;
+      if (e.touches && e.touches.length === 2 && pinch) {
+        e.preventDefault();
+        const td = touchDist(e);
+        const ratio = td.d / Math.max(1, pinch.d0);
+        setAdjustZoom(pinch.z0 * ratio, td.cx, td.cy);
+        // also pan with midpoint delta
+        state.adjust.panX = pinch.panX0 + (td.cx - pinch.cx);
+        state.adjust.panY = pinch.panY0 + (td.cy - pinch.cy);
+        layoutAdjustCanvas();
+        drawAdjust();
+        return;
+      }
+      if (drag) {
+        e.preventDefault();
+        const p = pos(e);
+        const imgPt = toImg(p.x, p.y);
+        const img = state.adjust.img;
+        imgPt.x = Math.max(0, Math.min(img.naturalWidth, imgPt.x));
+        imgPt.y = Math.max(0, Math.min(img.naturalHeight, imgPt.y));
+        if (drag.type === 'corner') state.adjust.corners[drag.i] = imgPt;
+        else if (drag.type === 'spine') state.adjust.spineX = imgPt.x;
+        drawAdjust();
+        updateAdjPreview();
+        return;
+      }
+      if (panDrag) {
+        e.preventDefault();
+        const p = pos(e);
+        state.adjust.panX = panDrag.panX0 + (p.cssX - panDrag.x);
+        state.adjust.panY = panDrag.panY0 + (p.cssY - panDrag.y);
+        layoutAdjustCanvas();
+        drawAdjust();
+      }
+    }
+
+    function onUp() { drag = null; pinch = null; panDrag = null; }
 
     canvas.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove);
@@ -1216,6 +1464,13 @@ button,input{font-family:inherit}
     canvas.addEventListener('touchstart', onDown, { passive: false });
     window.addEventListener('touchmove', onMove, { passive: false });
     window.addEventListener('touchend', onUp);
+    canvas.addEventListener('wheel', (e) => {
+      if (!state.adjust) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      setAdjustZoom((state.adjust.zoom || 1) * factor, e.clientX - rect.left, e.clientY - rect.top);
+    }, { passive: false });
 
     window.addEventListener('keydown', (e) => {
       if (!$('#modalAdjust').classList.contains('show') || !state.adjust) return;
@@ -1234,7 +1489,7 @@ button,input{font-family:inherit}
     });
 
     window.addEventListener('resize', () => {
-      if ($('#modalAdjust').classList.contains('show')) {
+      if ($('#modalAdjust').classList.contains('show') && state.adjust) {
         layoutAdjustCanvas();
         drawAdjust();
       }
@@ -1246,7 +1501,7 @@ button,input{font-family:inherit}
     if (!adj) return;
     const ph = state.photos.find(p => p.id === adj.photoId);
     if (!ph) return;
-    const dual = adj.dual && !isLikelySinglePage(adj.corners, adj.spineX, adj.img.naturalWidth);
+    const dual = !!adj.dual;
     ph.manual = {
       corners: adj.corners.map(c => ({ ...c })),
       spineX: adj.spineX,
@@ -1271,7 +1526,10 @@ button,input{font-family:inherit}
     ph.manual = null;
     adj.corners = ph.auto.corners.map(c => ({ ...c }));
     adj.spineX = ph.auto.spineX;
-    adj.dual = ph.auto.dual;
+    adj.dual = !!ph.auto.dual;
+    adj.zoom = 1; adj.panX = 0; adj.panY = 0;
+    syncAdjModeButtons();
+    layoutAdjustCanvas();
     drawAdjust();
     updateAdjPreview();
     toast('已重設返自動結果');
@@ -1342,10 +1600,40 @@ button,input{font-family:inherit}
     };
     $('#btnListCam').onclick = () => startCamera();
     $('#btnExportPdf').onclick = () => exportPdf();
+    $('#btnClearAll').onclick = () => {
+      if (!state.photos.length) { toast('清單已經空'); return; }
+      if (!confirm('清空全部相片同頁面？只會清呢個網頁記憶體，唔會刪你相簿原圖。')) return;
+      state.photos = [];
+      state.adjust = null;
+      renderList();
+      refreshStats();
+      toast('已清空，記憶體已釋放');
+    };
 
     $('#btnAdjClose').onclick = () => { $('#modalAdjust').classList.remove('show'); state.adjust = null; };
     $('#btnAdjReset').onclick = () => resetAdjust();
     $('#btnAdjApply').onclick = () => applyAdjust();
+    $('#btnModeDual').onclick = () => {
+      if (!state.adjust) return;
+      state.adjust.dual = true;
+      syncAdjModeButtons();
+      drawAdjust();
+      updateAdjPreview();
+    };
+    $('#btnModeSingle').onclick = () => {
+      if (!state.adjust) return;
+      state.adjust.dual = false;
+      syncAdjModeButtons();
+      drawAdjust();
+      updateAdjPreview();
+    };
+    $('#btnZoomIn').onclick = () => setAdjustZoom((state.adjust && state.adjust.zoom || 1) * 1.35);
+    $('#btnZoomOut').onclick = () => setAdjustZoom((state.adjust && state.adjust.zoom || 1) / 1.35);
+    $('#btnZoomReset').onclick = () => {
+      if (!state.adjust) return;
+      state.adjust.zoom = 1; state.adjust.panX = 0; state.adjust.panY = 0;
+      layoutAdjustCanvas(); drawAdjust();
+    };
 
     $('#fileUpload').onchange = (e) => {
       const files = Array.from(e.target.files || []);
