@@ -235,7 +235,7 @@ button,input{font-family:inherit}
         </div>
       </div>
     </div>
-    <p class="kbd-hint">拖藍點調四角 · 紫線＝書脊（單頁會收埋）· 雙指撐開放大／拖移 · ＋− 掣都得</p>
+    <p class="kbd-hint">拖圓點＝角 · 拖方塊／邊線＝整條邊 · 拖緊會出放大鏡 · 雙指或＋− 放大</p>
     <div class="bottom-bar">
       <button class="btn btn-primary btn-block" id="btnAdjApply" type="button">✅ 用呢個結果</button>
     </div>
@@ -439,7 +439,8 @@ button,input{font-family:inherit}
 
   /* ----- Book detection & warp (OpenCV or fallback) ----- */
   function defaultCorners(w, h) {
-    const m = Math.min(w, h) * 0.04;
+    // 偵唔到就用「成幅圖」——只留少少邊，唔好四點疊埋一個角
+    const m = Math.max(2, Math.min(w, h) * 0.008);
     return [
       { x: m, y: m },
       { x: w - m, y: m },
@@ -448,67 +449,125 @@ button,input{font-family:inherit}
     ];
   }
 
+  function quadArea(c) {
+    // shoelace
+    let a = 0;
+    for (let i = 0; i < 4; i++) {
+      const j = (i + 1) % 4;
+      a += c[i].x * c[j].y - c[j].x * c[i].y;
+    }
+    return Math.abs(a) / 2;
+  }
+
+  function cornersLookValid(corners, w, h) {
+    if (!corners || corners.length !== 4) return false;
+    for (const p of corners) {
+      if (!isFinite(p.x) || !isFinite(p.y)) return false;
+      if (p.x < -w * 0.05 || p.y < -h * 0.05 || p.x > w * 1.05 || p.y > h * 1.05) return false;
+    }
+    const area = quadArea(corners);
+    if (area < w * h * 0.05) return false; // 太細／疊埋
+    const xs = corners.map(p => p.x), ys = corners.map(p => p.y);
+    if (Math.max(...xs) - Math.min(...xs) < w * 0.12) return false;
+    if (Math.max(...ys) - Math.min(...ys) < h * 0.12) return false;
+    // 任意兩點太近
+    for (let i = 0; i < 4; i++) {
+      for (let j = i + 1; j < 4; j++) {
+        if (Math.hypot(corners[i].x - corners[j].x, corners[i].y - corners[j].y) < Math.min(w, h) * 0.04) return false;
+      }
+    }
+    return true;
+  }
+
+  function sanitizeDetect(res, w, h) {
+    let corners = res && res.corners;
+    let spineX = res && res.spineX;
+    let dual = res && res.dual;
+    if (spineX && typeof spineX === 'object') spineX = spineX.x;
+    if (!cornersLookValid(corners, w, h)) {
+      corners = defaultCorners(w, h);
+      spineX = w * 0.5;
+      dual = guessDual(w, h, spineX, 0, w);
+      return { corners, spineX, dual, failed: true };
+    }
+    spineX = isFinite(spineX) ? spineX : w * 0.5;
+    dual = !!dual;
+    return { corners, spineX, dual, failed: false };
+  }
+
   function detectBookAuto(img) {
     const w = img.naturalWidth || img.width;
     const h = img.naturalHeight || img.height;
+    let res = null;
     if (state.opencvReady && window.cv && cv.Mat) {
       try {
-        return detectWithOpenCV(img, w, h);
+        res = detectWithOpenCV(img, w, h);
       } catch (e) {
         console.warn('OpenCV detect fail', e);
       }
     }
-    return detectFallback(img, w, h);
+    if (!res) res = detectFallback(img, w, h);
+    return sanitizeDetect(res, w, h);
   }
 
   function detectFallback(img, w, h) {
-    // 無 OpenCV：用亮度搵紙面範圍，避免連地板都切入
+    // 亮度／對比搵紙面；失敗就交 sanitize 用成幅圖
     try {
       const c = document.createElement('canvas');
-      const maxSide = 480;
+      const maxSide = 640;
       const scale = Math.min(1, maxSide / Math.max(w, h));
       const sw = Math.round(w * scale), sh = Math.round(h * scale);
       c.width = sw; c.height = sh;
       const ctx = c.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(img, 0, 0, sw, sh);
       const data = ctx.getImageData(0, 0, sw, sh).data;
-      let sum = 0;
+      let sum = 0, nSamp = 0;
       for (let i = 0; i < data.length; i += 16) {
         sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+        nSamp++;
       }
-      const mean = sum / (data.length / 16);
-      const thr = mean + 18;
-      let minX = sw, minY = sh, maxX = 0, maxY = 0, hit = 0;
-      for (let y = 0; y < sh; y += 2) {
-        for (let x = 0; x < sw; x += 2) {
-          const i = (y * sw + x) * 4;
-          const g = (data[i] + data[i + 1] + data[i + 2]) / 3;
-          if (g > thr) {
-            hit++;
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
+      const mean = sum / nSamp;
+      const candidates = [];
+      for (const delta of [6, 14, 24, 36, -8]) {
+        const thr = mean + delta;
+        let x0 = sw, y0 = sh, x1 = 0, y1 = 0, n = 0;
+        for (let y = 0; y < sh; y += 2) {
+          for (let x = 0; x < sw; x += 2) {
+            const i = (y * sw + x) * 4;
+            const g = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            if (g > thr) {
+              n++;
+              if (x < x0) x0 = x; if (y < y0) y0 = y;
+              if (x > x1) x1 = x; if (y > y1) y1 = y;
+            }
           }
         }
-      }
-      if (hit > (sw * sh) * 0.04) {
-        const pad = Math.round(Math.min(sw, sh) * 0.01);
-        minX = Math.max(0, minX - pad) / scale;
-        minY = Math.max(0, minY - pad) / scale;
-        maxX = Math.min(sw - 1, maxX + pad) / scale;
-        maxY = Math.min(sh - 1, maxY + pad) / scale;
+        if (n < (sw * sh) * 0.06) continue;
+        const bw = (x1 - x0) / scale, bh = (y1 - y0) / scale;
+        if (bw < w * 0.18 || bh < h * 0.18) continue;
+        if (bw * bh > w * h * 0.97) continue;
+        const pad = Math.round(Math.min(sw, sh) * 0.006);
         const corners = [
-          { x: minX, y: minY }, { x: maxX, y: minY },
-          { x: maxX, y: maxY }, { x: minX, y: maxY }
+          { x: Math.max(0, x0 - pad) / scale, y: Math.max(0, y0 - pad) / scale },
+          { x: Math.min(sw - 1, x1 + pad) / scale, y: Math.max(0, y0 - pad) / scale },
+          { x: Math.min(sw - 1, x1 + pad) / scale, y: Math.min(sh - 1, y1 + pad) / scale },
+          { x: Math.max(0, x0 - pad) / scale, y: Math.min(sh - 1, y1 + pad) / scale }
         ];
-        const bw = maxX - minX, bh = maxY - minY;
-        const dual = guessDual(bw, bh, w * 0.5, minX, maxX);
-        return { corners, spineX: (minX + maxX) / 2, dual };
+        if (!cornersLookValid(corners, w, h)) continue;
+        candidates.push({
+          corners,
+          area: bw * bh,
+          dual: guessDual(bw, bh, (corners[0].x + corners[1].x) / 2, corners[0].x, corners[1].x)
+        });
+      }
+      if (candidates.length) {
+        candidates.sort((a, b) => b.area - a.area);
+        const best = candidates[0];
+        const xs = best.corners.map(c => c.x);
+        return { corners: best.corners, spineX: (Math.min(...xs) + Math.max(...xs)) / 2, dual: best.dual };
       }
     } catch (e) { /* fall through */ }
-    const corners = defaultCorners(w, h);
-    return { corners, spineX: w * 0.5, dual: guessDual(w, h, w * 0.5, 0, w) };
+    return { corners: defaultCorners(w, h), spineX: w * 0.5, dual: guessDual(w, h, w * 0.5, 0, w) };
   }
 
   function guessDual(bw, bh, spineX, minX, maxX) {
@@ -634,6 +693,7 @@ button,input{font-family:inherit}
     src.delete(); gray.delete(); blur.delete(); bright.delete();
     edges.delete(); dil.delete(); morph.delete();
 
+    // 無效四邊形交俾外層 sanitize 用成幅圖
     return { corners, spineX, dual };
   }
 
@@ -893,7 +953,9 @@ button,input{font-family:inherit}
     const spineX = (auto.spineX && typeof auto.spineX === 'object') ? auto.spineX.x : auto.spineX;
     let dual = !!auto.dual;
     if (dual && isLikelySinglePage(auto.corners, spineX, w)) dual = false;
-    auto = { corners: auto.corners, spineX: spineX, dual };
+    // 封面／單頁失敗時唔好硬切兩邊
+    if (auto.failed) dual = false;
+    auto = { corners: auto.corners, spineX: spineX, dual, failed: !!auto.failed };
     const pages = splitAndWarp(img, auto.corners, auto.spineX, dual);
     return {
       id: nextId('ph'),
@@ -1251,6 +1313,75 @@ button,input{font-family:inherit}
     drawAdjust();
   }
 
+  function edgeMids(corners) {
+    // 上、右、下、左 四邊中點（對應角 0-1, 1-2, 2-3, 3-0）
+    return [
+      { x: (corners[0].x + corners[1].x) / 2, y: (corners[0].y + corners[1].y) / 2, a: 0, b: 1 },
+      { x: (corners[1].x + corners[2].x) / 2, y: (corners[1].y + corners[2].y) / 2, a: 1, b: 2 },
+      { x: (corners[2].x + corners[3].x) / 2, y: (corners[2].y + corners[3].y) / 2, a: 2, b: 3 },
+      { x: (corners[3].x + corners[0].x) / 2, y: (corners[3].y + corners[0].y) / 2, a: 3, b: 0 }
+    ];
+  }
+
+  function drawLoupe(ctx, adj, imgPt) {
+    if (!imgPt || !adj.img) return;
+    const dpr = adj.dpr;
+    const loupeR = 72 * dpr; // 夠大嘅放大鏡
+    const zoom = 2.8;
+    const finger = toScreen(imgPt);
+    // 放大鏡放喺对角，唔遮住而家拖緊嗰個角
+    const cw = ctx.canvas.width, ch = ctx.canvas.height;
+    let lx = finger.x < cw / 2 ? cw - loupeR - 16 * dpr : loupeR + 16 * dpr;
+    let ly = finger.y < ch / 2 ? ch - loupeR - 16 * dpr : loupeR + 16 * dpr;
+    // 再保險：同手指距離太近就搬
+    if (Math.hypot(lx - finger.x, ly - finger.y) < loupeR * 1.6) {
+      lx = finger.x < cw / 2 ? cw - loupeR - 16 * dpr : loupeR + 16 * dpr;
+      ly = finger.y < ch / 2 ? loupeR + 16 * dpr : ch - loupeR - 16 * dpr;
+    }
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(lx, ly, loupeR, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.fillStyle = '#111';
+    ctx.fillRect(lx - loupeR, ly - loupeR, loupeR * 2, loupeR * 2);
+
+    // 由原圖抽樣放大（唔經而家 pan/zoom，直睇角位）
+    const srcR = loupeR / zoom;
+    // 對應：loupe 中心 = imgPt
+    const sx = imgPt.x - (srcR / adj.scale) * (adj.scale); // in image px: loupeR/zoom / scale? 
+    // 用圖像像素：放大鏡顯示 img 上半徑 (loupeR/dpr)/zoom 嘅區域… 改用自然像素
+    const imgRad = (loupeR / dpr) / zoom; // css px of loupe / zoom ≈ image? Better:
+    // 顯示圖像上固定約 55 像素半徑 * (1/zoom relative)
+    const sample = 48; // 原圖取樣半徑（像素）
+    ctx.drawImage(
+      adj.img,
+      imgPt.x - sample, imgPt.y - sample, sample * 2, sample * 2,
+      lx - loupeR, ly - loupeR, loupeR * 2, loupeR * 2
+    );
+
+    // 十字準心
+    ctx.strokeStyle = 'rgba(56,189,248,0.95)';
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(lx - 14 * dpr, ly); ctx.lineTo(lx + 14 * dpr, ly);
+    ctx.moveTo(lx, ly - 14 * dpr); ctx.lineTo(lx, ly + 14 * dpr);
+    ctx.stroke();
+    ctx.restore();
+
+    // 外框
+    ctx.beginPath();
+    ctx.arc(lx, ly, loupeR, 0, Math.PI * 2);
+    ctx.strokeStyle = '#38bdf8';
+    ctx.lineWidth = 3 * dpr;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(lx, ly, loupeR + 3 * dpr, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(15,23,42,0.7)';
+    ctx.lineWidth = 4 * dpr;
+    ctx.stroke();
+  }
+
   function drawAdjust() {
     const adj = state.adjust;
     if (!adj || !adj.img) return;
@@ -1277,6 +1408,19 @@ button,input{font-family:inherit}
     ctx.closePath();
     ctx.stroke();
 
+    // 邊線中點（可拖）
+    const mids = edgeMids(adj.corners);
+    mids.forEach((m) => {
+      const p = toScreen(m);
+      ctx.beginPath();
+      ctx.rect(p.x - 11 * dpr, p.y - 11 * dpr, 22 * dpr, 22 * dpr);
+      ctx.fillStyle = 'rgba(56,189,248,0.95)';
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2 * dpr;
+      ctx.stroke();
+    });
+
     if (adj.dual) {
       const sp = spinePoints(adj.corners, adj.spineX);
       const st = toScreen(sp.top), sb = toScreen(sp.bot);
@@ -1294,7 +1438,6 @@ button,input{font-family:inherit}
       ctx.fill();
     }
 
-    // 大啲嘅角點，手指易撳
     c.forEach((p, i) => {
       const rad = (i === adj.selected ? 16 : 14) * dpr;
       ctx.beginPath();
@@ -1305,6 +1448,8 @@ button,input{font-family:inherit}
       ctx.lineWidth = 2.5 * dpr;
       ctx.stroke();
     });
+
+    if (adj.loupePt) drawLoupe(ctx, adj, adj.loupePt);
   }
 
   let previewTimer = null;
@@ -1345,10 +1490,26 @@ button,input{font-family:inherit}
 
   function hitTest(sx, sy) {
     const adj = state.adjust;
-    const r = 28 * adj.dpr; // 大 hit 區
+    const r = 28 * adj.dpr;
     const c = adj.corners.map(toScreen);
     for (let i = 0; i < 4; i++) {
       if (Math.hypot(c[i].x - sx, c[i].y - sy) <= r) return { type: 'corner', i };
+    }
+    // 四邊中點（正方形 handle）
+    const mids = edgeMids(adj.corners);
+    for (let i = 0; i < 4; i++) {
+      const p = toScreen(mids[i]);
+      if (Math.abs(p.x - sx) <= 20 * adj.dpr && Math.abs(p.y - sy) <= 20 * adj.dpr) {
+        return { type: 'edge', i, a: mids[i].a, b: mids[i].b };
+      }
+    }
+    // 整段邊都可拖（中點以外）
+    for (let i = 0; i < 4; i++) {
+      const a = c[i], b = c[(i + 1) % 4];
+      if (distToSeg(sx, sy, a.x, a.y, b.x, b.y) < 16 * adj.dpr) {
+        const m = mids[i];
+        return { type: 'edge', i, a: m.a, b: m.b };
+      }
     }
     if (adj.dual) {
       const sp = spinePoints(adj.corners, adj.spineX);
@@ -1410,6 +1571,12 @@ button,input{font-family:inherit}
       if (hit) {
         drag = hit;
         if (hit.type === 'corner') state.adjust.selected = hit.i;
+        if (hit.type === 'edge') {
+          const p0 = state.adjust.corners[hit.a];
+          drag.last = { x: toImg(p.x, p.y).x, y: toImg(p.x, p.y).y };
+        }
+        const imgPt = toImg(p.x, p.y);
+        state.adjust.loupePt = { x: imgPt.x, y: imgPt.y };
         drawAdjust();
         return;
       }
@@ -1440,8 +1607,28 @@ button,input{font-family:inherit}
         const img = state.adjust.img;
         imgPt.x = Math.max(0, Math.min(img.naturalWidth, imgPt.x));
         imgPt.y = Math.max(0, Math.min(img.naturalHeight, imgPt.y));
-        if (drag.type === 'corner') state.adjust.corners[drag.i] = imgPt;
-        else if (drag.type === 'spine') state.adjust.spineX = imgPt.x;
+        if (drag.type === 'corner') {
+          state.adjust.corners[drag.i] = imgPt;
+          state.adjust.loupePt = { x: imgPt.x, y: imgPt.y };
+        } else if (drag.type === 'edge') {
+          const last = drag.last || imgPt;
+          const dx = imgPt.x - last.x;
+          const dy = imgPt.y - last.y;
+          const ca = state.adjust.corners[drag.a];
+          const cb = state.adjust.corners[drag.b];
+          ca.x = Math.max(0, Math.min(img.naturalWidth, ca.x + dx));
+          ca.y = Math.max(0, Math.min(img.naturalHeight, ca.y + dy));
+          cb.x = Math.max(0, Math.min(img.naturalWidth, cb.x + dx));
+          cb.y = Math.max(0, Math.min(img.naturalHeight, cb.y + dy));
+          drag.last = { x: imgPt.x, y: imgPt.y };
+          state.adjust.loupePt = {
+            x: (ca.x + cb.x) / 2,
+            y: (ca.y + cb.y) / 2
+          };
+        } else if (drag.type === 'spine') {
+          state.adjust.spineX = imgPt.x;
+          state.adjust.loupePt = { x: imgPt.x, y: imgPt.y };
+        }
         drawAdjust();
         updateAdjPreview();
         return;
@@ -1456,7 +1643,10 @@ button,input{font-family:inherit}
       }
     }
 
-    function onUp() { drag = null; pinch = null; panDrag = null; }
+    function onUp() {
+      drag = null; pinch = null; panDrag = null;
+      if (state.adjust) { state.adjust.loupePt = null; drawAdjust(); }
+    }
 
     canvas.addEventListener('mousedown', onDown);
     window.addEventListener('mousemove', onMove);
