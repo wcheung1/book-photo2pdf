@@ -133,7 +133,7 @@ button,input{font-family:inherit}
     <label>輸出畫質
       <select id="setQuality"><option value="0.85">標準</option><option value="0.95">高清</option><option value="0.7">慳位</option></select>
     </label>
-    <label>PDF 頁闊（px）
+    <label>處理解析度（px）
       <select id="setPdfWidth"><option value="1200">1200</option><option value="1600" selected>1600</option><option value="2000">2000</option></select>
     </label>
     <div class="lib-status" id="libStatus">程式庫載入緊…</div>
@@ -580,6 +580,94 @@ button,input{font-family:inherit}
     return aspect >= 1.1;
   }
 
+  function matToPts(mat, scale) {
+    const pts = [];
+    let arr = null;
+    try {
+      if (mat.data32F && mat.data32F.length >= 8) arr = Array.from(mat.data32F.subarray(0, 8));
+      else if (mat.data32S && mat.data32S.length >= 8) arr = Array.from(mat.data32S.subarray(0, 8));
+    } catch (e) { arr = null; }
+    if (!arr) return null;
+    for (let i = 0; i < 4; i++) pts.push({ x: arr[i * 2] / scale, y: arr[i * 2 + 1] / scale });
+    return orderCorners(pts);
+  }
+
+  // 用 Canny + Hough 直線 → 交點組四邊形（跟你講嘅連續線／polygon 做法）
+  function findQuadByHough(gray, sw, sh, scale, w, h) {
+    try {
+      let edges = new cv.Mat();
+      let blur = new cv.Mat();
+      cv.GaussianBlur(gray, blur, new cv.Size(3, 3), 0);
+      cv.Canny(blur, edges, 50, 150);
+      let lines = new cv.Mat();
+      // rho, theta, threshold, minLineLength, maxLineGap
+      cv.HoughLinesP(edges, lines, 1, Math.PI / 180, 60, Math.min(sw, sh) * 0.25, 20);
+      const horiz = [], vert = [];
+      for (let i = 0; i < lines.rows; i++) {
+        const x1 = lines.data32S[i * 4], y1 = lines.data32S[i * 4 + 1];
+        const x2 = lines.data32S[i * 4 + 2], y2 = lines.data32S[i * 4 + 3];
+        const ang = Math.atan2(y2 - y1, x2 - x1);
+        const len = Math.hypot(x2 - x1, y2 - y1);
+        const a = ((ang % Math.PI) + Math.PI) % Math.PI;
+        const item = { x1, y1, x2, y2, len, a };
+        if (a < Math.PI * 0.2 || a > Math.PI * 0.8) horiz.push(item);
+        else if (Math.abs(a - Math.PI / 2) < Math.PI * 0.2) vert.push(item);
+      }
+      edges.delete(); blur.delete(); lines.delete();
+      if (horiz.length < 2 || vert.length < 2) return null;
+
+      function lineKey(L, horizontal) {
+        return horizontal ? (L.y1 + L.y2) / 2 : (L.x1 + L.x2) / 2;
+      }
+      function pickExtremes(arr, horizontal) {
+        arr.sort((a, b) => lineKey(a, horizontal) - lineKey(b, horizontal));
+        // 合併相近線：取最長
+        const clusters = [];
+        for (const L of arr) {
+          const k = lineKey(L, horizontal);
+          const last = clusters[clusters.length - 1];
+          if (last && Math.abs(lineKey(last.best, horizontal) - k) < Math.min(sw, sh) * 0.06) {
+            if (L.len > last.best.len) last.best = L;
+          } else clusters.push({ best: L });
+        }
+        if (clusters.length < 2) return null;
+        return [clusters[0].best, clusters[clusters.length - 1].best];
+      }
+      const H = pickExtremes(horiz, true);
+      const V = pickExtremes(vert, false);
+      if (!H || !V) return null;
+
+      function intersect(A, B) {
+        // infinite line intersect
+        const x1 = A.x1, y1 = A.y1, x2 = A.x2, y2 = A.y2;
+        const x3 = B.x1, y3 = B.y1, x4 = B.x2, y4 = B.y2;
+        const den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+        if (Math.abs(den) < 1e-6) return null;
+        const px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den;
+        const py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den;
+        return { x: px / scale, y: py / scale };
+      }
+      const top = H[0].y1 + H[0].y2 < H[1].y1 + H[1].y2 ? H[0] : H[1];
+      const bot = top === H[0] ? H[1] : H[0];
+      const left = V[0].x1 + V[0].x2 < V[1].x1 + V[1].x2 ? V[0] : V[1];
+      const right = left === V[0] ? V[1] : V[0];
+      const tl = intersect(top, left), tr = intersect(top, right);
+      const br = intersect(bot, right), bl = intersect(bot, left);
+      if (!tl || !tr || !br || !bl) return null;
+      const corners = orderCorners([tl, tr, br, bl]);
+      if (!cornersLookValid(corners, w, h)) return null;
+      // 拒絕「幾乎成幅」——通常係影到相框唔係書
+      const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
+      const bw = Math.max(...xs) - Math.min(...xs);
+      const bh = Math.max(...ys) - Math.min(...ys);
+      if (bw * bh > w * h * 0.96) return null;
+      return corners;
+    } catch (e) {
+      console.warn('Hough quad', e);
+      return null;
+    }
+  }
+
   function detectWithOpenCV(img, w, h) {
     const maxSide = 900;
     const scale = Math.min(1, maxSide / Math.max(w, h));
@@ -616,7 +704,7 @@ button,input{font-family:inherit}
       for (let i = 0; i < contours.size(); i++) {
         const cnt = contours.get(i);
         const area = cv.contourArea(cnt);
-        if (area < imgArea * 0.08 || area > imgArea * 0.98) continue;
+        if (area < imgArea * 0.1 || area > imgArea * 0.92) continue;
         const peri = cv.arcLength(cnt, true);
         let approx = new cv.Mat();
         cv.approxPolyDP(cnt, approx, 0.025 * peri, true);
@@ -643,38 +731,63 @@ button,input{font-family:inherit}
       return best;
     }
 
-    let best = bestQuadFrom(morph);
-    // 2) 後備：Canny 邊緣
-    if (!best) {
-      cv.Canny(blur, edges, 40, 120);
-      const k = cv.Mat.ones(3, 3, cv.CV_8U);
-      cv.dilate(edges, dil, k);
-      k.delete();
-      best = bestQuadFrom(dil);
+    // 評分：寧取「明顯係書」嘅四邊形，唔好成幅相框
+    function scoreQuadMat(mat) {
+      const c = matToPts(mat, scale);
+      if (!c || !cornersLookValid(c, w, h)) return -1;
+      const xs = c.map(p => p.x), ys = c.map(p => p.y);
+      const bw = Math.max(...xs) - Math.min(...xs);
+      const bh = Math.max(...ys) - Math.min(...ys);
+      const area = bw * bh;
+      const fill = area / (w * h);
+      if (fill < 0.1 || fill > 0.92) return -1;
+      return area * (1 - Math.abs(fill - 0.55)); // 偏好佔畫面約一半幾
     }
+
+    let best = bestQuadFrom(morph);
+    let bestScore = best ? scoreQuadMat(best) : -1;
+    if (best && bestScore < 0) { best.delete(); best = null; bestScore = -1; }
+
+    // 2) Hough 直線組四邊形
+    const houghCorners = findQuadByHough(gray, sw, sh, scale, w, h);
+    // 3) Canny 輪廓
+    cv.Canny(blur, edges, 40, 120);
+    const k = cv.Mat.ones(3, 3, cv.CV_8U);
+    cv.dilate(edges, dil, k);
+    k.delete();
+    let best2 = bestQuadFrom(dil);
+    const s2 = best2 ? scoreQuadMat(best2) : -1;
+    if (best2 && s2 > bestScore) {
+      if (best) best.delete();
+      best = best2; bestScore = s2;
+    } else if (best2) best2.delete();
+
     k5.delete();
 
-    let corners;
+    let corners = null;
+    if (houghCorners && cornersLookValid(houghCorners, w, h)) {
+      corners = houghCorners;
+    }
     if (best) {
-      const pts = [];
-      let arr = null;
-      try {
-        if (best.data32F && best.data32F.length >= 8) arr = Array.from(best.data32F.subarray(0, 8));
-        else if (best.data32S && best.data32S.length >= 8) arr = Array.from(best.data32S.subarray(0, 8));
-      } catch (e) { arr = null; }
+      const fromMat = matToPts(best, scale);
       best.delete();
-      if (arr) {
-        for (let i = 0; i < 4; i++) pts.push({ x: arr[i * 2] / scale, y: arr[i * 2 + 1] / scale });
-        corners = orderCorners(pts);
-        const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
-        const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
-        corners = corners.map(pt => ({
-          x: pt.x + (cx - pt.x) * 0.02,
-          y: pt.y + (cy - pt.y) * 0.02
-        }));
-      } else {
-        corners = detectFallback(img, w, h).corners;
+      if (fromMat && cornersLookValid(fromMat, w, h)) {
+        const xs = fromMat.map(p => p.x), ys = fromMat.map(p => p.y);
+        const fill = ((Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys))) / (w * h);
+        const hFill = corners ? ((Math.max(...corners.map(p=>p.x)) - Math.min(...corners.map(p=>p.x))) *
+          (Math.max(...corners.map(p=>p.y)) - Math.min(...corners.map(p=>p.y)))) / (w * h) : 1;
+        if (!corners || (fill < 0.92 && Math.abs(fill - 0.55) < Math.abs(hFill - 0.55))) {
+          corners = fromMat;
+        }
       }
+    }
+    if (corners) {
+      const cx = (corners[0].x + corners[1].x + corners[2].x + corners[3].x) / 4;
+      const cy = (corners[0].y + corners[1].y + corners[2].y + corners[3].y) / 4;
+      corners = corners.map(pt => ({
+        x: pt.x + (cx - pt.x) * 0.015,
+        y: pt.y + (cy - pt.y) * 0.015
+      }));
     } else {
       corners = detectFallback(img, w, h).corners;
     }
@@ -901,40 +1014,47 @@ button,input{font-family:inherit}
     return canvas;
   }
 
+  function quadSize(q) {
+    const topW = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y);
+    const botW = Math.hypot(q[2].x - q[3].x, q[2].y - q[3].y);
+    const leftH = Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y);
+    const rightH = Math.hypot(q[2].x - q[1].x, q[2].y - q[1].y);
+    return {
+      topW: Math.max(1, (topW + botW) / 2),
+      leftH: Math.max(1, (leftH + rightH) / 2)
+    };
+  }
+
   function splitAndWarp(img, corners, spineX, dual) {
-    const w = img.naturalWidth || img.width;
-    const h = img.naturalHeight || img.height;
     const sp = spinePoints(corners, spineX);
     const pdfW = state.pdfWidth;
     const pages = [];
+    const doDewarp = pdfW >= 800;
+
+    function warpKeepAspect(quad, side) {
+      const qs = quadSize(quad);
+      // 跟四邊形真實長闊比，唔好硬套 A4
+      let outW = pdfW;
+      let outH = Math.round(pdfW * (qs.leftH / qs.topW));
+      outH = Math.max(200, Math.min(2800, outH));
+      // 單頁極寬／極高時，改以短邊對齊 pdfW，避免爆記憶體又唔變形
+      if (outH > pdfW * 2.8) {
+        outH = Math.round(pdfW * 2.8);
+        outW = Math.round(outH * (qs.topW / qs.leftH));
+      }
+      const canvas = warpPage(img, quad, outW, outH, doDewarp);
+      return { id: nextId('pg'), side, dataUrl: canvas.toDataURL('image/jpeg', state.quality), aspect: qs.topW / qs.leftH };
+    }
 
     if (!dual) {
-      const outH = Math.round(pdfW * 1.414);
-      const canvas = warpPage(img, corners, pdfW, outH, pdfW >= 800);
-      pages.push({ id: nextId('pg'), side: 'single', dataUrl: canvas.toDataURL('image/jpeg', state.quality) });
+      pages.push(warpKeepAspect(corners, 'single'));
       return pages;
     }
 
-    // Left page: TL, spineTop, spineBot, BL
     const leftQuad = [corners[0], sp.top, sp.bot, corners[3]];
-    // Right: spineTop, TR, BR, spineBot
     const rightQuad = [sp.top, corners[1], corners[2], sp.bot];
-
-    // Estimate page aspect from quad height/width
-    function quadSize(q) {
-      const topW = Math.hypot(q[1].x - q[0].x, q[1].y - q[0].y);
-      const leftH = Math.hypot(q[3].x - q[0].x, q[3].y - q[0].y);
-      return { topW: Math.max(1, topW), leftH: Math.max(1, leftH) };
-    }
-    const ls = quadSize(leftQuad), rs = quadSize(rightQuad);
-    const leftH = Math.round(pdfW * (ls.leftH / ls.topW));
-    const rightH = Math.round(pdfW * (rs.leftH / rs.topW));
-
-    const doDewarp = pdfW >= 800;
-    const leftC = warpPage(img, leftQuad, pdfW, Math.max(400, Math.min(2400, leftH)), doDewarp);
-    const rightC = warpPage(img, rightQuad, pdfW, Math.max(400, Math.min(2400, rightH)), doDewarp);
-    pages.push({ id: nextId('pg'), side: 'left', dataUrl: leftC.toDataURL('image/jpeg', state.quality) });
-    pages.push({ id: nextId('pg'), side: 'right', dataUrl: rightC.toDataURL('image/jpeg', state.quality) });
+    pages.push(warpKeepAspect(leftQuad, 'left'));
+    pages.push(warpKeepAspect(rightQuad, 'right'));
     return pages;
   }
 
@@ -1737,26 +1857,35 @@ button,input{font-family:inherit}
 
     showProgress(true, '產生 PDF 緊…', 0, pages.length);
     const { jsPDF } = window.jspdf;
-    let doc = null;
+
+    // 先讀晒每頁真實長闊比；統一高度，闊度跟每頁比例（唔夾硬 A4）
+    const metas = [];
     for (let i = 0; i < pages.length; i++) {
       const im = await loadImage(pages[i].dataUrl);
-      const w = im.naturalWidth, h = im.naturalHeight;
-      // A4-ish points: fit image
-      const orient = w >= h ? 'l' : 'p';
-      if (!doc) doc = new jsPDF({ orientation: orient, unit: 'pt', format: 'a4' });
-      else doc.addPage('a4', orient);
-      const pw = doc.internal.pageSize.getWidth();
-      const ph = doc.internal.pageSize.getHeight();
-      const scale = Math.min(pw / w, ph / h);
-      const dw = w * scale, dh = h * scale;
-      const ox = (pw - dw) / 2, oy = (ph - dh) / 2;
-      doc.addImage(pages[i].dataUrl, 'JPEG', ox, oy, dw, dh);
-      showProgress(true, '產生 PDF 緊…', i + 1, pages.length);
+      metas.push({ w: im.naturalWidth, h: im.naturalHeight, dataUrl: pages[i].dataUrl });
+      showProgress(true, '準備 PDF 頁面…', i + 1, pages.length);
+      await yieldToUI();
+    }
+    const TARGET_H = 842; // pt，高度對齊；闊度按比例
+    let doc = null;
+    for (let i = 0; i < metas.length; i++) {
+      const { w, h, dataUrl } = metas[i];
+      const aspect = w / Math.max(1, h);
+      const pageH = TARGET_H;
+      const pageW = Math.max(200, Math.min(2000, TARGET_H * aspect));
+      if (!doc) {
+        doc = new jsPDF({ unit: 'pt', format: [pageW, pageH], orientation: pageW >= pageH ? 'l' : 'p' });
+      } else {
+        doc.addPage([pageW, pageH], pageW >= pageH ? 'l' : 'p');
+      }
+      // 舖滿頁面，唔留白拉歪
+      doc.addImage(dataUrl, 'JPEG', 0, 0, pageW, pageH);
+      showProgress(true, '產生 PDF 緊…', i + 1, metas.length);
       await yieldToUI();
     }
     doc.save('書本掃描.pdf');
     showProgress(false);
-    toast('PDF 已下載');
+    toast('PDF 已下載（跟書頁比例）');
   }
 
   /* ----- Events ----- */
