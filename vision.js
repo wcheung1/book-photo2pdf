@@ -15,6 +15,7 @@ function manifest() {
     let m = null;
     try { const r = await fetch(MODEL_BASE + 'manifest.json', { cache: 'no-cache' }); if (r.ok) m = await r.json(); } catch (e) { }
     m = Object.assign({}, DEFAULT_MANIFEST, m || {});
+    if (globalThis.BOOKSCAN_CORNER_MODEL) m.corner = globalThis.BOOKSCAN_CORNER_MODEL; // 測試用
     // 清走唔再用嘅舊模型快取
     try {
       const c = await caches.open(MODEL_CACHE), keep = [MODEL_BASE + m.corner, MODEL_BASE + m.uvdoc];
@@ -529,8 +530,10 @@ export async function detectCornersML(analysisCanvas) {
 // ---------------------------------------------------------------- 書脊
 function findSpine(g, w, h, q) {
   // 將跨頁拉正成細圖，搵中間最暗、最少字嘅直條
+  // 左右兩頁一樣闊，所以書脊幾乎一定喺拉正之後嘅正中間（真實相片實測：0.49–0.51）。
+  // 只喺中間 ±2% 範圍搵好清楚嘅摺痕；搵唔到就用正中。
   const r = estimateAspect(q, w, h);
-  const RH = 240, RW = Math.max(60, Math.round(RH * r));
+  const RH = 360, RW = Math.max(80, Math.round(RH * r));
   const H = unitHomography(q);
   const mean = new Float32Array(RW), sd = new Float32Array(RW);
   for (let x = 0; x < RW; x++) {
@@ -547,12 +550,21 @@ function findSpine(g, w, h, q) {
   const M = sm(mean), D = sm(sd);
   const med = Array.from(M.slice(Math.round(RW * 0.15), Math.round(RW * 0.85))).sort((a, b) => a - b);
   const median = med[med.length >> 1] || 0;
-  let bx = Math.round(RW / 2), bs = -1e9;
-  for (let x = Math.round(RW * 0.38); x <= Math.round(RW * 0.62); x++) {
-    const s = (median - M[x]) - 0.6 * D[x] - 0.15 * Math.abs(x - RW / 2) / RW * 100;
-    if (s > bs) { bs = s; bx = x; }
+  const lo = Math.round(RW * 0.48), hi = Math.round(RW * 0.52), mid = RW / 2;
+  const k = Math.max(2, Math.round(RW * 0.006));
+  const resp = (x) => Math.abs(mean[x] - (mean[Math.max(0, x - k)] + mean[Math.min(RW - 1, x + k)]) / 2);
+  // 摺痕（窄嘅深 / 淺直線）或者書脊陰影
+  let bx = Math.round(mid), br = -1;
+  for (let x = lo; x <= hi; x++) {
+    const s = resp(x) + 0.5 * Math.max(0, median - M[x]) - 0.08 * Math.abs(x - mid);
+    if (s > br) { br = s; bx = x; }
   }
-  const depth = median - M[bx];
+  const base = []; for (let x = Math.round(RW * 0.4); x <= Math.round(RW * 0.6); x++) base.push(resp(x) + 0.5 * Math.max(0, median - M[x]));
+  base.sort((a, b) => a - b);
+  const typical = base[base.length >> 1] || 0;
+  if (!(br > 6 && br > 3.5 * typical)) bx = Math.round(mid); // 冇明顯摺痕：用正中
+  let depth = 0; for (let x = lo; x <= hi; x++) depth = Math.max(depth, median - M[x]);
+  void D;
   return { u: (bx + 0.5) / RW, depth, aspect: r };
 }
 
@@ -567,6 +579,48 @@ function refineSpineEnd(mk, w, h, H, u, fromV, toV) {
     if (on) { run++; if (run >= 3) { const vv = fromV + (toV - fromV) * (k - 2) / steps; return applyH(H, u, vv); } } else run = 0;
   }
   return null;
+}
+
+/** 四隻角偏離 90° 最多幾多度 */
+function angleDev(q) {
+  let mx = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = (i + 3) % 4, c = (i + 1) % 4;
+    const v1 = [q[2 * a] - q[2 * i], q[2 * a + 1] - q[2 * i + 1]], v2 = [q[2 * c] - q[2 * i], q[2 * c + 1] - q[2 * i + 1]];
+    const cos = (v1[0] * v2[0] + v1[1] * v2[1]) / (Math.hypot(...v1) * Math.hypot(...v2) + 1e-9);
+    mx = Math.max(mx, Math.abs(Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI - 90));
+  }
+  return mx;
+}
+/**
+ * 修正「一兩隻角錯咗」：模型有時會黐住頁入面嘅印刷框，而唔係紙邊。
+ * 本書係長方形，所以用另外三隻角推算（平行四邊形補角），再細微調；
+ * 邊緣分數明顯高啲、角度又合理先接受。真實相片實測：正確嘅框分數一定高過錯嘅。
+ */
+function repairCorners(g, w, h, q) {
+  const fit = (qq) => quadScore(g, w, h, qq) - 0.004 * Math.max(0, angleDev(qq) - 10);
+  let cur = q.slice(), curS = fit(cur);
+  const R = Math.max(3, Math.round(Math.max(w, h) * 0.015));
+  for (let round = 0; round < 2; round++) {
+    let best = null, bestS = curS + 0.03;
+    for (let i = 0; i < 4; i++) {
+      const p = (i + 3) % 4, n = (i + 1) % 4, o = (i + 2) % 4;
+      const c = cur.slice();
+      c[2 * i] = cur[2 * p] + cur[2 * n] - cur[2 * o];
+      c[2 * i + 1] = cur[2 * p + 1] + cur[2 * n + 1] - cur[2 * o + 1];
+      if (!isGoodQuad(c, w, h)) continue;
+      const r = refineQuad(g, w, h, c, R, 1);
+      const s = fit(r);
+      if (s > bestS) { bestS = s; best = r; }
+    }
+    if (!best) break;
+    cur = best; curS = bestS;
+  }
+  return cur;
+}
+export function _debugScore(canvas, quadN) {
+  const img = canvasToImg(canvas), g = toGray(img), q = denorm(quadN, img.w, img.h);
+  return { edge: quadScore(g, img.w, img.h, q), angle: angleDev(q) };
 }
 
 // ---------------------------------------------------------------- 主偵測
@@ -590,6 +644,7 @@ export async function detectBook(analysisCanvas, midCanvas, opts = {}) {
   }
   for (const c of cands) {
     c.valid = isGoodQuad(c.q, w, h);
+    if (c.valid) c.q = repairCorners(g, w, h, c.q);
     c.edge = c.valid ? quadScore(g, w, h, c.q) : 0;
   }
   for (const c of cands) {
@@ -599,7 +654,9 @@ export async function detectBook(analysisCanvas, midCanvas, opts = {}) {
   const valid = cands.filter((c) => c.valid).sort((a, b) => b.total - a.total);
   const debug = cands.map((c) => ({ m: c.method, edge: +c.edge.toFixed(3), total: +c.total.toFixed(3), valid: c.valid, q: c.q.map((v, i) => +(v / (i % 2 ? h : w)).toFixed(3)) }));
   let result;
-  if (valid.length && valid[0].edge >= 0.28) {
+  // 邊緣對比低（例如白書放淺色地板）時，只要 AI 模型自己好有信心都照用
+  const accept = valid.length && (valid[0].edge >= 0.28 || (valid[0].method === 'ai' && ml && ml.score > 0.85 && valid[0].edge >= 0.15));
+  if (accept) {
     const best = valid[0];
     let q = refineQuad(g, w, h, best.q, Math.max(3, Math.round(Math.max(w, h) * 0.012)));
     if (quadScore(g, w, h, q) < best.edge) q = best.q;
@@ -615,7 +672,8 @@ export async function detectBook(analysisCanvas, midCanvas, opts = {}) {
     result = { quad: qn, method: best.method, confidence: Math.min(1, best.edge + 0.1 * best.agree), failed: false };
     // 本書塞滿成個畫面：大部分角都貼住相邊，而邊緣又唔清楚 → 用成幅相
     const nb = [0, 1, 2, 3].filter((i) => Math.min(qn[2 * i], qn[2 * i + 1], 1 - qn[2 * i], 1 - qn[2 * i + 1]) < 0.03).length;
-    if (nb >= 3 && best.edge < 0.55) result = { quad: [0, 0, 1, 0, 1, 1, 0, 1], method: 'full-frame', confidence: best.edge, failed: false };
+    const areaN = polyArea([[qn[0], qn[1]], [qn[2], qn[3]], [qn[4], qn[5]], [qn[6], qn[7]]]);
+    if (nb >= 3 && areaN > 0.85 && best.edge < 0.55) result = { quad: [0, 0, 1, 0, 1, 1, 0, 1], method: 'full-frame', confidence: best.edge, failed: false };
   } else {
     result = { quad: [0, 0, 1, 0, 1, 1, 0, 1], method: 'full', confidence: 0, failed: true };
   }

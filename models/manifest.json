@@ -1,5 +1,5 @@
 {
-  "corner": "doccornernet_lean.onnx",
+  "corner": "corner_ft_20261015_0046.onnx",
   "uvdoc": "uvdoc.onnx",
   "note": "微調咗角點模型之後，將新檔案放入呢個 models 資料夾，再將上面 corner 改做新檔名。"
 }
