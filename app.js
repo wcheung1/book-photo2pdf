@@ -505,6 +505,7 @@ function updateStatus() {
   } else if (S.shots.length) el.append(h('span', {}, `${S.shots.length} 張相 · ${pages} 頁`));
   if (modelMsg) el.append(h('span', {}, modelMsg));
   if (V.runtimeInfo.uvdocBackend) el.append(h('span', {}, '曲頁拉直用 ' + V.runtimeInfo.uvdocBackend));
+  if (V.runtimeInfo.cornerModel) el.append(h('span', {}, '書角模型：' + (V.runtimeInfo.cornerModel === 'doccornernet_lean.onnx' ? '原裝' : V.runtimeInfo.cornerModel.replace('.onnx', ''))));
   if (ready < S.shots.length && !Q.running) { /* 有錯誤 */ }
 }
 

@@ -457,11 +457,13 @@ export async function fetchModel(url, onProgress) {
 }
 
 let cornerP = null, uvP = null;
-export const runtimeInfo = { uvdocBackend: '', cornerBackend: '', error: '' };
+export const runtimeInfo = { uvdocBackend: '', cornerBackend: '', cornerModel: '', error: '' };
 export function getCornerSession(onProgress) {
   if (!cornerP) cornerP = (async () => {
     const ort = await getOrt();
-    const bytes = await fetchModel(MODEL_BASE + (await manifest()).corner, onProgress);
+    const cm = (await manifest()).corner;
+    const bytes = await fetchModel(MODEL_BASE + cm, onProgress);
+    runtimeInfo.cornerModel = cm;
     const s = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
     runtimeInfo.cornerBackend = 'CPU';
     return s;
@@ -531,7 +533,6 @@ export async function detectCornersML(analysisCanvas) {
 function findSpine(g, w, h, q) {
   // 將跨頁拉正成細圖，搵中間最暗、最少字嘅直條
   // 左右兩頁一樣闊，所以書脊幾乎一定喺拉正之後嘅正中間（真實相片實測：0.49–0.51）。
-  // 只喺中間 ±2% 範圍搵好清楚嘅摺痕；搵唔到就用正中。
   const r = estimateAspect(q, w, h);
   const RH = 360, RW = Math.max(80, Math.round(RH * r));
   const H = unitHomography(q);
@@ -551,21 +552,12 @@ function findSpine(g, w, h, q) {
   const med = Array.from(M.slice(Math.round(RW * 0.15), Math.round(RW * 0.85))).sort((a, b) => a - b);
   const median = med[med.length >> 1] || 0;
   const lo = Math.round(RW * 0.48), hi = Math.round(RW * 0.52), mid = RW / 2;
-  const k = Math.max(2, Math.round(RW * 0.006));
-  const resp = (x) => Math.abs(mean[x] - (mean[Math.max(0, x - k)] + mean[Math.min(RW - 1, x + k)]) / 2);
   // 摺痕（窄嘅深 / 淺直線）或者書脊陰影
-  let bx = Math.round(mid), br = -1;
-  for (let x = lo; x <= hi; x++) {
-    const s = resp(x) + 0.5 * Math.max(0, median - M[x]) - 0.08 * Math.abs(x - mid);
-    if (s > br) { br = s; bx = x; }
-  }
-  const base = []; for (let x = Math.round(RW * 0.4); x <= Math.round(RW * 0.6); x++) base.push(resp(x) + 0.5 * Math.max(0, median - M[x]));
-  base.sort((a, b) => a - b);
-  const typical = base[base.length >> 1] || 0;
-  if (!(br > 6 && br > 3.5 * typical)) bx = Math.round(mid); // 冇明顯摺痕：用正中
+  // 書脊固定喺透視校正後嘅正中（左右兩頁一樣闊）。實測比自動搵摺痕更準。
   let depth = 0; for (let x = lo; x <= hi; x++) depth = Math.max(depth, median - M[x]);
   void D;
-  return { u: (bx + 0.5) / RW, depth, aspect: r };
+  void mid;
+  return { u: 0.5, depth, aspect: r };
 }
 
 function refineSpineEnd(mk, w, h, H, u, fromV, toV) {
